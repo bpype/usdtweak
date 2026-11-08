@@ -52,8 +52,8 @@ struct EditorSetSelection : public EditorCommand {
         if (_editor) {
             auto &selection = _editor->GetSelection();
             if (_layer) {
-                _editor->SetCurrentLayer(_layer);
-                _editor->SetLayerPathSelection(_path);
+                // Selecting a layer path always comes from another window: a link, a search result, ...
+                _editor->NavigateToLayerPath(_layer, _path);
             }
             if (_stageRefPtr) {
                 _editor->SetCurrentStage(_stageRefPtr);
@@ -90,6 +90,37 @@ struct EditorSelectAttributePath : public EditorCommand {
 };
 template void ExecuteAfterDraw<EditorSelectAttributePath>(SdfPath attributePath);
 
+/// Brings forward a window already opened, used by widgets showing their selection in another window
+struct EditorRevealWindow : public EditorCommand {
+
+    EditorRevealWindow(EditorWindow window) : _window(window) {}
+
+    bool DoIt() override {
+        if (_editor) {
+            _editor->RevealWindow(_window);
+        }
+        return false;
+    }
+    EditorWindow _window;
+};
+template void ExecuteAfterDraw<EditorRevealWindow>(EditorWindow window);
+
+/// Selects the attribute and shows it in the attribute editor, opening it if closed
+struct EditorOpenAttributeEditor : public EditorCommand {
+
+    EditorOpenAttributeEditor(SdfPath attributePath) : _attributePath(attributePath) {}
+
+    bool DoIt() override {
+        if (_editor) {
+            _editor->SetLayerPathSelection(_attributePath);
+            _editor->RevealWindow(EditorWindow::AttributeEditor, true);
+        }
+        return false;
+    }
+    SdfPath _attributePath;
+};
+template void ExecuteAfterDraw<EditorOpenAttributeEditor>(SdfPath attributePath);
+
 struct EditorOpenStage : public EditorCommand {
 
     EditorOpenStage(std::string stagePath) : _stagePath(std::move(stagePath)) {}
@@ -115,6 +146,7 @@ struct EditorSetCurrentStage : public EditorCommand {
         if (_editor) {
             if (auto stage = _editor->GetStageCache().FindOneMatching(_layer)) {
                 _editor->SetCurrentStage(stage);
+                _editor->RevealWindow(EditorWindow::StageOutliner, true);
             }
         }
         return false; // never store this command
@@ -176,6 +208,7 @@ struct EditorSetCurrentLayer : public EditorCommand {
     bool DoIt() override {
         if (_editor && _layer) {
             _editor->SetCurrentLayer(_layer);
+            _editor->RevealWindow(EditorWindow::LayerHierarchy, true);
         }
 
         return false;
@@ -192,6 +225,7 @@ struct EditorFindOrOpenLayer : public EditorCommand {
     bool DoIt() override {
         if (_editor) {
             _editor->FindOrOpenLayer(_layerPath);
+            _editor->RevealWindow(EditorWindow::LayerHierarchy, true);
         }
 
         return false;

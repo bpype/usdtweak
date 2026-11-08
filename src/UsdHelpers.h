@@ -3,6 +3,10 @@
 #include <pxr/usd/sdf/listEditorProxy.h>
 #include <pxr/usd/sdf/reference.h>
 #include <pxr/usd/sdf/listOp.h>
+#include <optional>
+#include <string>
+#include <pxr/usd/usd/attribute.h>
+#include <pxr/usd/usd/prim.h>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -111,3 +115,46 @@ std::string FindNextAvailableTokenString(std::string prefix);
 
 // Find usd file format extensions and returns them prefixed with a dot
 const std::vector<std::string> GetUsdValidExtensions();
+
+
+///
+/// Checks answering "will an edit of this prim in the current edit target work, and will it show".
+/// Shared by the stage property editor and the viewport manipulators so they agree and explain the same way.
+/// Everything is recomputed on demand, nothing is cached.
+///
+
+/// The reasons USD refuses to author on a prim in the current edit target
+enum class EditBlocked { None, InstanceProxy, Prototype, NoEditTarget, PrimNotMapped, LayerReadOnly, FormatNotEditable };
+
+EditBlocked GetEditBlocked(const UsdPrim &prim);
+
+/// The widgets authoring on the prim are greyed when this is false
+inline bool IsPrimEditable(const UsdPrim &prim) { return GetEditBlocked(prim) == EditBlocked::None; }
+
+/// Why the prim can't be edited (first line) and how to make it editable (second line), empty when it is editable
+std::string GetEditBlockedReason(const UsdPrim &prim);
+
+/// Position of an opinion in the strength order of a prim index: the node, then the layer in the node layer stack.
+/// Lower is stronger.
+struct OpinionStrength {
+    int node = -1;
+    int layer = -1; // -1 with a valid node when the layer is unknown, for value clips
+    bool HasNode() const { return node >= 0; }
+};
+
+/// Where the current edit target writes the opinions of the prim. No node when the edit target site isn't in the
+/// prim index, we can't tell how strong the edit will be.
+OpinionStrength GetEditTargetStrength(const UsdPrim &prim);
+
+/// The opinion providing the attribute value when it is stronger than the edit target
+struct ShadowingOpinion {
+    std::string source; ///< layer display name, or the value clips description
+    SdfPath path;       ///< attribute path in the source
+};
+
+/// The opinion hiding the edits of the attribute value, none when the edits will show or when we can't tell
+std::optional<ShadowingOpinion> FindShadowingOpinion(const UsdAttribute &attribute, UsdTimeCode time,
+                                                     const OpinionStrength &editTargetStrength);
+
+/// "This value comes from a stronger opinion: <source> <path>\nEdits in the edit target <layer> are hidden by it."
+std::string FormatShadowingOpinion(const ShadowingOpinion &opinion, const UsdStageWeakPtr &stage);

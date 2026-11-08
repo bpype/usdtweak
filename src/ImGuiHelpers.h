@@ -42,6 +42,11 @@ struct ScopedStyleColor {
 bool Splitter(bool splitVertically, float thickness, float *size1, float *size2, float minSize1, float minSize2,
               float splitterLongAxisSize = -1.0f);
 
+/// Clickable text that navigates somewhere (selects a prim, opens a layer...), returns true when clicked.
+/// Drawn in the current text color, no background, underlined with a hand cursor on hover, to tell it apart from
+/// buttons opening a menu.
+bool NavigationLink(const char *label);
+
 /// Creates a combo box with a search bar filtering the list elements
 bool ComboWithFilter(const char *label, const char *preview_value, const std::vector<std::string> &items, int *current_item,
                      ImGuiComboFlags combo_flags, int popup_max_height_in_items = -1);
@@ -114,10 +119,13 @@ inline bool GetClampedSelectionRange(const ImGuiSelectionRequest &req, int itemC
 /// Call once after BeginMultiSelect() (for SetAll/SetRange from keyboard) and once after EndMultiSelect()
 /// (for the click/range requests produced by the frame).
 /// indexToPath must be callable as: SdfPath indexToPath(int index)
+/// Returns true when a request selected items, clearing or deselecting returns false.
 template <typename OwnerT, typename IndexToPathFn>
-inline void ApplyMultiSelectRequests(ImGuiMultiSelectIO *msIO, Selection &selection, const OwnerT &owner,
+inline bool ApplyMultiSelectRequests(ImGuiMultiSelectIO *msIO, Selection &selection, const OwnerT &owner,
                                      int itemCount, IndexToPathFn indexToPath) {
+    bool hasSelected = false;
     for (const ImGuiSelectionRequest &req : msIO->Requests) {
+        hasSelected |= req.Selected;
         if (req.Type == ImGuiSelectionRequestType_SetAll) {
             selection.Clear(owner);
             if (req.Selected) {
@@ -137,4 +145,5 @@ inline void ApplyMultiSelectRequests(ImGuiMultiSelectIO *msIO, Selection &select
             }
         }
     }
+    return hasSelected;
 }

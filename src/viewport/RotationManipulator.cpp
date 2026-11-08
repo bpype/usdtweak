@@ -4,6 +4,8 @@
 #include <vector>
 
 #include "Commands.h"
+#include "UsdHelpers.h"
+#include "ManipulatorEditability.h"
 #include "Constants.h"
 #include "GeometricFunctions.h"
 #include "Gui.h"
@@ -11,6 +13,16 @@
 #include "Viewport.h"
 
 static constexpr float axisSize = 1.2f;
+
+/// The op written through UsdGeomXformCommonAPI, one of the 3 axis euler rotations
+static bool IsEditedOpType(UsdGeomXformOp::Type type) {
+    return type >= UsdGeomXformOp::TypeRotateXYZ && type <= UsdGeomXformOp::TypeRotateZYX;
+}
+
+ManipulatorEditability RotationManipulator::ComputeEditability(const Viewport &viewport) const {
+    return ComputeManipulatorEditability(_selectedXformables, viewport.GetCurrentTimeCode(), IsEditedOpType);
+}
+
 static constexpr int nbSegments = 1024; // nb segments per circle
 
 static void CreateCircle(std::vector<GfVec2d> &points) {
@@ -48,6 +60,8 @@ static bool IntersectsUnitCircle(const GfVec3d &planeNormal3d, const GfVec3d &pl
 
 bool RotationManipulator::IsMouseOver(const Viewport &viewport) {
 
+    const bool blocked = ComputeEditability(viewport).state == ManipulatorEditability::Blocked;
+    // A blocked gizmo is still hit tested, hovering it shows the HUD but it can't be dragged
     if (_xformable) {
         const GfVec2d mousePosition = viewport.GetMousePosition();
         const auto &frustum = viewport.GetViewportCamera().GetFrustum();
@@ -63,13 +77,13 @@ bool RotationManipulator::IsMouseOver(const Viewport &viewport) {
 
         if (IntersectsUnitCircle(xAxis, origin, ray, scale)) {
             _selectedAxis = XAxis;
-            return true;
+            return !blocked;
         } else if (IntersectsUnitCircle(yAxis, origin, ray, scale)) {
             _selectedAxis = YAxis;
-            return true;
+            return !blocked;
         } else if (IntersectsUnitCircle(zAxis, origin, ray, scale)) {
             _selectedAxis = ZAxis;
-            return true;
+            return !blocked;
         }
     }
     _selectedAxis = None;
@@ -170,13 +184,6 @@ inline static int ProjectHalfCircle(const std::vector<GfVec2d> &_manipulatorCirc
     return static_cast<int>(_manipulator2dPoints.size());
 };
 
-template <int Axis> inline ImColor AxisColor(int selectedAxis) {
-    if (selectedAxis == Axis) {
-        return ImColor(ImVec4(1.0, 1.0, 0.0, 1.0));
-    } else {
-        return ImColor(ImVec4(Axis == Manipulator::XAxis, Axis == Manipulator::YAxis, Axis == Manipulator::ZAxis, 1.0));
-    }
-}
 
 void RotationManipulator::OnDrawFrame(const Viewport &viewport) {
 
@@ -193,6 +200,9 @@ void RotationManipulator::OnDrawFrame(const Viewport &viewport) {
 
         const auto toWorld = ComputeManipulatorToWorldTransform(viewport);
 
+        // Before the ImGuiViewport below shadows the viewport
+        const ManipulatorEditability editability = ComputeEditability(viewport);
+        const bool showHud = _selectedAxis != None && viewport.IsInMouseHoverState(); // hovered, not dragged nor orbiting
         ImDrawList *draw_list = ImGui::GetWindowDrawList();
         ImGuiViewport *viewport = ImGui::GetMainViewport();
         auto textureSize = GfVec2d(viewport->WorkSize[0], viewport->WorkSize[1]);
@@ -207,9 +217,14 @@ void RotationManipulator::OnDrawFrame(const Viewport &viewport) {
         const int zEnd = ProjectHalfCircle<2>(_manipulatorCircles, scale, cameraPosition, manipulatorOrigin, mv, proj,
                                               textureSize, toWorld, _manipulator2dPoints);
 
-        draw_list->AddPolyline(_manipulator2dPoints.data(), xEnd, AxisColor<XAxis>(_selectedAxis), ImDrawFlags_None, 3);
-        draw_list->AddPolyline(_manipulator2dPoints.data() + xEnd, yEnd - xEnd, AxisColor<YAxis>(_selectedAxis), ImDrawFlags_None, 3);
-        draw_list->AddPolyline(_manipulator2dPoints.data() + yEnd, zEnd - yEnd, AxisColor<ZAxis>(_selectedAxis), ImDrawFlags_None, 3);
+        draw_list->AddPolyline(_manipulator2dPoints.data(), xEnd, ManipulatorAxisColor(XAxis, _selectedAxis, editability.state),
+                               ImDrawFlags_None, 3);
+        draw_list->AddPolyline(_manipulator2dPoints.data() + xEnd, yEnd - xEnd,
+                               ManipulatorAxisColor(YAxis, _selectedAxis, editability.state), ImDrawFlags_None, 3);
+        draw_list->AddPolyline(_manipulator2dPoints.data() + yEnd, zEnd - yEnd,
+                               ManipulatorAxisColor(ZAxis, _selectedAxis, editability.state), ImDrawFlags_None, 3);
+        if (showHud)
+            DrawManipulatorEditabilityHud(editability);
     }
 }
 
@@ -296,6 +311,8 @@ Manipulator *RotationManipulator::OnUpdate(Viewport &viewport) {
         // Apply the same angle to every selected prim using its own local rotation frame
         for (size_t i = 0; i < _selectedXformables.size(); ++i) {
             auto &xf = _selectedXformables[i];
+            if (!IsPrimEditable(xf.GetPrim()))
+                continue; // USD refuses the edit, the HUD explains why
 
             const GfVec3d pxAxis = _rotateMatricesOnBegin[i].GetRow3(0);
             const GfVec3d pyAxis = _rotateMatricesOnBegin[i].GetRow3(1);

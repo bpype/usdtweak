@@ -1,11 +1,20 @@
 #include "ScaleManipulator.h"
 #include "Commands.h"
+#include "UsdHelpers.h"
+#include "ManipulatorEditability.h"
 #include "Constants.h"
 #include "GeometricFunctions.h"
 #include "Gui.h"
 #include "Viewport.h"
 #include <iostream>
 #include <pxr/base/gf/matrix4f.h>
+
+/// The op written through UsdGeomXformCommonAPI
+static bool IsEditedOpType(UsdGeomXformOp::Type type) { return type == UsdGeomXformOp::TypeScale; }
+
+ManipulatorEditability ScaleManipulator::ComputeEditability(const Viewport &viewport) const {
+    return ComputeManipulatorEditability(_selectedXformables, viewport.GetCurrentTimeCode(), IsEditedOpType);
+}
 
 /*
  *   Same code as PositionManipulator
@@ -19,6 +28,8 @@ ScaleManipulator::~ScaleManipulator() {}
 
 bool ScaleManipulator::IsMouseOver(const Viewport &viewport) {
 
+    const bool blocked = ComputeEditability(viewport).state == ManipulatorEditability::Blocked;
+    // A blocked gizmo is still hit tested, hovering it shows the HUD but it can't be dragged
     if (_xformable) {
         const auto &frustum = viewport.GetViewportCamera().GetFrustum();
         const auto mv = frustum.ComputeViewMatrix();
@@ -48,13 +59,13 @@ bool ScaleManipulator::IsMouseOver(const Viewport &viewport) {
         // TODO: it looks like USD has function to compute segment, have a look !
         if (IntersectsSegment(xAxisOnScreen, originOnScreen, mousePosition, pickBounds)) {
             _selectedAxis = XAxis;
-            return true;
+            return !blocked;
         } else if (IntersectsSegment(yAxisOnScreen, originOnScreen, mousePosition, pickBounds)) {
             _selectedAxis = YAxis;
-            return true;
+            return !blocked;
         } else if (IntersectsSegment(zAxisOnScreen, originOnScreen, mousePosition, pickBounds)) {
             _selectedAxis = ZAxis;
-            return true;
+            return !blocked;
         }
     }
     _selectedAxis = None;
@@ -113,13 +124,6 @@ GfMatrix4d ScaleManipulator::ComputeManipulatorToWorldTransform(const Viewport &
     return GfMatrix4d(1.0);
 }
 
-template <int Axis> inline ImColor AxisColor(int selectedAxis) {
-    if (selectedAxis == Axis) {
-        return ImColor(ImVec4(1.0, 1.0, 0.0, 1.0));
-    } else {
-        return ImColor(ImVec4(Axis == Manipulator::XAxis, Axis == Manipulator::YAxis, Axis == Manipulator::ZAxis, 1.0));
-    }
-}
 
 // TODO: same as rotation manipulator, share in a base class
 void ScaleManipulator::OnDrawFrame(const Viewport &viewport) {
@@ -142,6 +146,9 @@ void ScaleManipulator::OnDrawFrame(const Viewport &viewport) {
         const GfVec4d yAxis3d = GfVec4d(0.0, axisLength, 0.0, 1.0) * toWorld;
         const GfVec4d zAxis3d = GfVec4d(0.0, 0.0, axisLength, 1.0) * toWorld;
 
+        // Before the ImGuiViewport below shadows the viewport
+        const ManipulatorEditability editability = ComputeEditability(viewport);
+        const bool showHud = _selectedAxis != None && viewport.IsInMouseHoverState(); // hovered, not dragged nor orbiting
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImGuiViewport *viewport = ImGui::GetMainViewport();
         auto textureSize = GfVec2d(viewport->WorkSize[0], viewport->WorkSize[1]);
@@ -152,14 +159,19 @@ void ScaleManipulator::OnDrawFrame(const Viewport &viewport) {
         const auto zAxisOnScreen = ProjectToTextureScreenSpace(mv, proj, textureSize, GfVec3d(zAxis3d.data()));
 
         drawList->AddLine(ImVec2(originOnScreen[0], originOnScreen[1]), ImVec2(xAxisOnScreen[0], xAxisOnScreen[1]),
-                          AxisColor<XAxis>(_selectedAxis), 3);
+                          ManipulatorAxisColor(XAxis, _selectedAxis, editability.state), 3);
         drawList->AddLine(ImVec2(originOnScreen[0], originOnScreen[1]), ImVec2(yAxisOnScreen[0], yAxisOnScreen[1]),
-                          AxisColor<YAxis>(_selectedAxis), 3);
+                          ManipulatorAxisColor(YAxis, _selectedAxis, editability.state), 3);
         drawList->AddLine(ImVec2(originOnScreen[0], originOnScreen[1]), ImVec2(zAxisOnScreen[0], zAxisOnScreen[1]),
-                          AxisColor<ZAxis>(_selectedAxis), 3);
-        drawList->AddCircleFilled(ImVec2(xAxisOnScreen[0], xAxisOnScreen[1]), 10, ImColor(ImVec4(1.0, 0, 0, 1)), 32);
-        drawList->AddCircleFilled(ImVec2(yAxisOnScreen[0], yAxisOnScreen[1]), 10, ImColor(ImVec4(0.0, 1.0, 0, 1)), 32);
-        drawList->AddCircleFilled(ImVec2(zAxisOnScreen[0], zAxisOnScreen[1]), 10, ImColor(ImVec4(0.0, 0, 1.0, 1)), 32);
+                          ManipulatorAxisColor(ZAxis, _selectedAxis, editability.state), 3);
+        drawList->AddCircleFilled(ImVec2(xAxisOnScreen[0], xAxisOnScreen[1]), 10,
+                                  ManipulatorAxisColor(XAxis, None, editability.state), 32);
+        drawList->AddCircleFilled(ImVec2(yAxisOnScreen[0], yAxisOnScreen[1]), 10,
+                                  ManipulatorAxisColor(YAxis, None, editability.state), 32);
+        drawList->AddCircleFilled(ImVec2(zAxisOnScreen[0], zAxisOnScreen[1]), 10,
+                                  ManipulatorAxisColor(ZAxis, None, editability.state), 32);
+        if (showHud)
+            DrawManipulatorEditabilityHud(editability);
     }
 }
 
@@ -221,6 +233,8 @@ Manipulator *ScaleManipulator::OnUpdate(Viewport &viewport) {
         // Apply ratio to every selected xformable
         for (size_t i = 0; i < _selectedXformables.size(); ++i) {
             auto &xf = _selectedXformables[i];
+            if (!IsPrimEditable(xf.GetPrim()))
+                continue; // USD refuses the edit, the HUD explains why
             GfVec3f scale = _scalesOnBegin[i];
 
             if (uniform) {

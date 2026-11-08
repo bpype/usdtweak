@@ -8,6 +8,11 @@
 PXR_NAMESPACE_USING_DIRECTIVE
 
 class Viewport;
+enum class StageCameraNavigation : int;
+
+/// Mode selection widgets: a combo, and an icon button opening a menu
+void DrawStageCameraNavigationCombo(StageCameraNavigation &mode);
+void DrawStageCameraNavigationButton(StageCameraNavigation &mode);
 //
 // Manage and store the cameras owned by a viewport.
 // A camera can be a stage camera or an internal viewport camera.
@@ -60,6 +65,9 @@ public:
         return _currentConfig->_renderCameraType == StageCamera;
     }
     
+    // Copy the current stage camera to Persp and use Persp
+    void SwitchFromStageCameraToPerspective(const UsdStageRefPtr &stage);
+
     inline bool IsUsingInternalOrthoCamera () const {
         return _currentConfig->_renderCameraType != StageCamera
             && _currentConfig->_renderCameraType != ViewportPerspective;

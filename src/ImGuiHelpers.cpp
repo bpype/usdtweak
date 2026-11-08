@@ -14,6 +14,36 @@ bool Splitter(bool splitVertically, float thickness, float *size1, float *size2,
     return ImGui::SplitterBehavior(bb, id, splitVertically ? ImGuiAxis_X : ImGuiAxis_Y, size1, size2, minSize1, minSize2, 0.0f);
 }
 
+// Same layout as ImGui::TextLink, but keeps the current text color and only underlines on hover
+bool NavigationLink(const char *label) {
+    ImGuiWindow *window = ImGui::GetCurrentWindow();
+    if (window->SkipItems)
+        return false;
+
+    const ImGuiID id = window->GetID(label);
+    const char *labelEnd = ImGui::FindRenderedTextEnd(label);
+    const ImVec2 pos(window->DC.CursorPos.x, window->DC.CursorPos.y + window->DC.CurrLineTextBaseOffset);
+    const ImVec2 size = ImGui::CalcTextSize(label, labelEnd, true);
+    const ImRect bb(pos, pos + size);
+    ImGui::ItemSize(size, 0.0f);
+    if (!ImGui::ItemAdd(bb, id))
+        return false;
+
+    bool hovered = false;
+    bool held = false;
+    const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
+    ImGui::RenderNavCursor(bb, id);
+
+    const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+    if (hovered || held) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        const float lineY = bb.Max.y;
+        window->DrawList->AddLine(ImVec2(bb.Min.x, lineY), ImVec2(bb.Max.x, lineY), textColor);
+    }
+    ImGui::RenderText(bb.Min, label, labelEnd);
+    return pressed;
+}
+
 // Code originaly from David Briscoe & others
 // https://gist.github.com/idbrii/5ddb2135ca122a0ec240ce046d9e6030
 // modified here to have a simpler matching algorithm without scores and a different look.

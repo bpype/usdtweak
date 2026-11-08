@@ -575,7 +575,9 @@ void DrawStageOutliner(UsdStageRefPtr stage, Selection &selectedPaths) {
             FocusedOnFirstSelectedPath(selectedPaths.GetAnchorPrimPath(stage), paths, clipper);
         }
         msIO = ImGui::EndMultiSelect();
-        ApplyMultiSelectRequests(msIO, selectedPaths, stage, primCount, [&](int i) { return paths[i]; });
+        if (ApplyMultiSelectRequests(msIO, selectedPaths, stage, primCount, [&](int i) { return paths[i]; })) {
+            ExecuteAfterDraw<EditorRevealWindow>(EditorWindow::StagePropertyEditor);
+        }
 
         ImGui::EndTable();
     }

@@ -68,6 +68,7 @@ namespace clk = std::chrono;
 #define UsdPrimPropertiesWindowTitle "Stage property editor"
 #define UsdConnectionEditorWindowTitle "Connection editor"
 #define SdfLayerHierarchyWindowTitle "Layer hierarchy"
+#define SdfLayerHierarchyWindowId "###Layer hierarchy" // the title shows the layer name
 #define SdfLayerStackWindowTitle "Stage layer editor"
 #define SdfPrimPropertiesWindowTitle "Layer property editor"
 #define SdfLayerAsciiEditorWindowTitle "Layer text editor"
@@ -96,15 +97,28 @@ inline bool BelongToSameDockTab(ImGuiWindow *w1, ImGuiWindow *w2) {
     return w1->RootWindow->DockNode->TabBar == w2->RootWindow->DockNode->TabBar;
 }
 
-inline void BringWindowToTabFront(const char *windowName) {
+/// windowId is the window name, or its "###id" part when the title changes
+static void RevealImGuiWindow(const char *windowId, bool &isShown, bool openIfClosed) {
+    if (!isShown) {
+        // ImGui selects the tab of a window reappearing in a dock node
+        isShown = openIfClosed;
+        return;
+    }
+    ImGuiWindow *window = ImGui::FindWindowByName(windowId);
+    if (!window) {
+        return;
+    }
     ImGuiContext &g = *GImGui;
-    if (ImGuiWindow *window = ImGui::FindWindowByName(windowName)) {
-        if (g.NavWindow != window && !BelongToSameDockTab(window, g.HoveredWindow)) {
-            ImGuiDockNode *dockNode = window ? window->DockNode : nullptr;
-            if (dockNode && dockNode->TabBar) {
-                dockNode->TabBar->SelectedTabId = dockNode->TabBar->NextSelectedTabId = window->TabId;
-            }
-        }
+    const bool isWorkingInWindow = g.NavWindow && g.NavWindow->RootWindow == window;
+    if (isWorkingInWindow || BelongToSameDockTab(window, g.HoveredWindow)) {
+        return;
+    }
+    ImGuiDockNode *dockNode = window->DockIsActive ? window->DockNode : nullptr;
+    if (dockNode && dockNode->TabBar) {
+        dockNode->TabBar->SelectedTabId = dockNode->TabBar->NextSelectedTabId = window->TabId;
+    } else if (!window->DockIsActive) {
+        // Raising a docked window would raise its whole dock space above the floating windows
+        ImGui::BringWindowToDisplayFront(window);
     }
 }
 
@@ -499,8 +513,8 @@ static void BeginBackgoundDock() {
 
 static void EndBackgroundDock() { ImGui::End(); }
 
-/// Call back for dropping a file in the ui
-/// TODO Drop callback should popup a modal dialog with the different options available
+/// Call back for dropping a file in the ui. An empty file creates a new stage, otherwise the file opens as a stage
+/// or as a layer depending on the "drop opens stage" preference.
 void Editor::DropCallback(GLFWwindow *window, int count, const char **paths) {
     void *userPointer = glfwGetWindowUserPointer(window);
     if (userPointer) {
@@ -512,6 +526,8 @@ void Editor::DropCallback(GLFWwindow *window, int count, const char **paths) {
                 if (ArchGetFileLength(paths[i]) == 0) {
                     // if the file is empty, this is considered a new file
                     editor->CreateStage(std::string(paths[i]));
+                } else if (editor->_settings._dropOpensStage) {
+                    editor->OpenStage(std::string(paths[i]));
                 } else {
                     editor->FindOrOpenLayer(std::string(paths[i]));
                 }
@@ -804,21 +820,55 @@ void Editor::HydraRender() {
 
 void Editor::ShowDialogSaveLayerAs(SdfLayerHandle layerToSaveAs) { DrawModalDialog<SaveLayerAsDialog>(*this, layerToSaveAs); }
 
+void Editor::RevealWindow(EditorWindow window, bool openIfClosed) {
+    switch (window) {
+    case EditorWindow::StageOutliner:
+        RevealImGuiWindow(UsdStageHierarchyWindowTitle, _settings._showOutliner, openIfClosed);
+        break;
+    case EditorWindow::StagePropertyEditor:
+        RevealImGuiWindow(UsdPrimPropertiesWindowTitle, _settings._showPropertyEditor, openIfClosed);
+        break;
+    case EditorWindow::LayerHierarchy:
+        RevealImGuiWindow(SdfLayerHierarchyWindowId, _settings._showLayerHierarchyEditor, openIfClosed);
+        break;
+    case EditorWindow::LayerPropertyEditor:
+        RevealImGuiWindow(SdfPrimPropertiesWindowTitle, _settings._showPrimSpecEditor, openIfClosed);
+        break;
+    case EditorWindow::AttributeEditor:
+        RevealImGuiWindow(SdfAttributeWindowTitle, _settings._showSdfAttributeEditor, openIfClosed);
+        break;
+    }
+}
+
+/// A selected layer prim is shown in the layer hierarchy, and its properties in the layer property editor
+void Editor::RevealLayerSelection(const SdfPath &path, bool openIfClosed) {
+    if (path.IsPrimPath()) {
+        RevealWindow(EditorWindow::LayerHierarchy, openIfClosed);
+    }
+    RevealWindow(EditorWindow::LayerPropertyEditor, openIfClosed);
+}
+
+void Editor::NavigateToLayerPath(const SdfLayerRefPtr &layer, const SdfPath &path) {
+    SetCurrentLayer(layer);
+    SetLayerPathSelection(path);
+    RevealLayerSelection(path, true);
+}
+
 void Editor::AddLayerPathSelection(const SdfPath &primPath) {
     _selection.AddSelected(GetCurrentLayer(), primPath);
-    BringWindowToTabFront(SdfPrimPropertiesWindowTitle);
+    RevealLayerSelection(primPath, false);
     UsdTweakSelectionChangedNotice().Send();
 }
 
 void Editor::SetLayerPathSelection(const SdfPath &primPath) {
     _selection.SetSelected(GetCurrentLayer(), primPath);
-    BringWindowToTabFront(SdfPrimPropertiesWindowTitle);
+    RevealLayerSelection(primPath, false);
     UsdTweakSelectionChangedNotice().Send();
 }
 
 void Editor::AddStagePathSelection(const SdfPath &primPath) {
     _selection.AddSelected(GetCurrentStage(), primPath);
-    BringWindowToTabFront(UsdPrimPropertiesWindowTitle);
+    RevealWindow(EditorWindow::StagePropertyEditor);
     UsdTweakSelectionChangedNotice().Send();
 }
 
@@ -845,7 +895,7 @@ void Editor::SetCurrentUsdPrim(UsdStageRefPtr stage, SdfPath primPath) {
 void Editor::SetStagePathSelection(const SdfPath &primPath) {
     _selection.SetSelected(GetCurrentStage(), primPath);
     SetCurrentUsdPrim(GetCurrentStage(), primPath);
-    BringWindowToTabFront(UsdPrimPropertiesWindowTitle);
+    RevealWindow(EditorWindow::StagePropertyEditor);
     UsdTweakSelectionChangedNotice().Send();
 }
 
@@ -912,6 +962,44 @@ static void DrawStageSelector(const UsdStageRefPtr &stage, const Selection &sele
             const std::string editTargetName = stage ? stage->GetEditTarget().GetLayer()->GetDisplayName() : "";
             ImGui::Text("%s", editTargetName.c_str());
         }
+    }
+}
+
+void Editor::DrawWindowsMenuItems() {
+    if (ImGui::BeginMenu("Stage")) {
+        ImGui::MenuItem(UsdStageHierarchyWindowTitle, nullptr, &_settings._showOutliner);
+        ImGui::MenuItem(UsdPrimPropertiesWindowTitle, nullptr, &_settings._showPropertyEditor);
+        ImGui::MenuItem(SdfLayerStackWindowTitle, nullptr, &_settings._showLayerStackEditor);
+        ImGui::MenuItem(UsdConnectionEditorWindowTitle, nullptr, &_settings._showUsdConnectionEditor);
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Layers")) {
+        ImGui::MenuItem(SdfLayerHierarchyWindowTitle, nullptr, &_settings._showLayerHierarchyEditor);
+        ImGui::MenuItem(SdfPrimPropertiesWindowTitle, nullptr, &_settings._showPrimSpecEditor);
+        ImGui::MenuItem(SdfLayerAsciiEditorWindowTitle, nullptr, &_settings._textEditor);
+        ImGui::MenuItem(SdfAttributeWindowTitle, nullptr, &_settings._showSdfAttributeEditor);
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Viewports")) {
+        ImGui::MenuItem(Viewport1WindowTitle, nullptr, &_settings._showViewport1);
+        ImGui::MenuItem(Viewport2WindowTitle, nullptr, &_settings._showViewport2);
+        ImGui::MenuItem(Viewport3WindowTitle, nullptr, &_settings._showViewport3);
+        ImGui::MenuItem(Viewport4WindowTitle, nullptr, &_settings._showViewport4);
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    ImGui::MenuItem(ContentBrowserWindowTitle, nullptr, &_settings._showContentBrowser);
+    ImGui::MenuItem(TimelineWindowTitle, nullptr, &_settings._showTimeline);
+#ifdef HAVE_USDVALIDATION
+    ImGui::MenuItem(ValidatorWindowTitle, nullptr, &_settings._showValidator);
+#endif
+    ImGui::MenuItem(StatusBarWindowTitle, nullptr, &_settings._showStatusBar);
+    ImGui::Separator();
+    if (ImGui::BeginMenu("Debug")) {
+        ImGui::MenuItem(DebugWindowTitle, nullptr, &_settings._showDebugWindow);
+        ImGui::MenuItem(HydraBrowserWindowTitle, nullptr, &_settings._showHydraBrowser);
+        ImGui::MenuItem(HydraNoticeLoggerWindowTitle, nullptr, &_settings._showHydraNoticeLogger);
+        ImGui::EndMenu();
     }
 }
 
@@ -1020,27 +1108,7 @@ void Editor::DrawMainMenuBar() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Windows")) {
-            ImGui::MenuItem(DebugWindowTitle, nullptr, &_settings._showDebugWindow);
-            ImGui::MenuItem(ContentBrowserWindowTitle, nullptr, &_settings._showContentBrowser);
-            ImGui::MenuItem(UsdStageHierarchyWindowTitle, nullptr, &_settings._showOutliner);
-            ImGui::MenuItem(UsdPrimPropertiesWindowTitle, nullptr, &_settings._showPropertyEditor);
-            ImGui::MenuItem(UsdConnectionEditorWindowTitle, nullptr, &_settings._showUsdConnectionEditor);
-            ImGui::MenuItem(SdfLayerHierarchyWindowTitle, nullptr, &_settings._showLayerHierarchyEditor);
-            ImGui::MenuItem(SdfLayerStackWindowTitle, nullptr, &_settings._showLayerStackEditor);
-            ImGui::MenuItem(SdfPrimPropertiesWindowTitle, nullptr, &_settings._showPrimSpecEditor);
-            ImGui::MenuItem(SdfLayerAsciiEditorWindowTitle, nullptr, &_settings._textEditor);
-            ImGui::MenuItem(SdfAttributeWindowTitle, nullptr, &_settings._showSdfAttributeEditor);
-            ImGui::MenuItem(HydraBrowserWindowTitle, nullptr, &_settings._showHydraBrowser);
-            ImGui::MenuItem(HydraNoticeLoggerWindowTitle, nullptr, &_settings._showHydraNoticeLogger);
-#ifdef HAVE_USDVALIDATION
-            ImGui::MenuItem(ValidatorWindowTitle, nullptr, &_settings._showValidator);
-#endif
-            ImGui::MenuItem(TimelineWindowTitle, nullptr, &_settings._showTimeline);
-            ImGui::MenuItem(Viewport1WindowTitle, nullptr, &_settings._showViewport1);
-            ImGui::MenuItem(Viewport2WindowTitle, nullptr, &_settings._showViewport2);
-            ImGui::MenuItem(Viewport3WindowTitle, nullptr, &_settings._showViewport3);
-            ImGui::MenuItem(Viewport4WindowTitle, nullptr, &_settings._showViewport4);
-            ImGui::MenuItem(StatusBarWindowTitle, nullptr, &_settings._showStatusBar);
+            DrawWindowsMenuItems();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {
@@ -1218,7 +1286,7 @@ void Editor::Draw() {
     if (_settings._showLayerHierarchyEditor) {
         TRACE_SCOPE(SdfLayerHierarchyWindowTitle);
         const std::string title(SdfLayerHierarchyWindowTitle + (rootLayer ? " - " + rootLayer->GetDisplayName() : "") +
-                                "###Layer hierarchy");
+                                SdfLayerHierarchyWindowId);
         ImGui::Begin(title.c_str(), &_settings._showLayerHierarchyEditor, layerWindowFlag);
         DrawLayerPrimHierarchy(rootLayer, GetSelection());
         ImGui::End();

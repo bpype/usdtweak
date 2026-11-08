@@ -6,6 +6,7 @@
 #include <pxr/usd/usdGeom/gprim.h>
 #include <pxr/usd/usdGeom/xformCommonAPI.h>
 #include "Manipulator.h"
+#include "ManipulatorEditability.h"
 #include "Gui.h" // for ImVec2
 
 PXR_NAMESPACE_USING_DIRECTIVE
@@ -29,6 +30,9 @@ class RotationManipulator : public Manipulator {
 
     /// Called when the viewport changes its selection
     void OnSelectionChange(Viewport &) override;
+
+    /// Whether the edits will work on the selected prims, recomputed on each call
+    ManipulatorEditability ComputeEditability(const Viewport &viewport) const;
 
   private:
     UsdTimeCode GetEditionTimeCode(const Viewport &);

@@ -8,6 +8,7 @@
 #include <pxr/usd/usdGeom/xformCommonAPI.h>
 
 #include "Manipulator.h"
+#include "ManipulatorEditability.h"
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -31,6 +32,9 @@ class PositionManipulator : public Manipulator {
 
     /// Called when the viewport changes its selection
     void OnSelectionChange(Viewport &) override;
+
+    /// Whether the edits will work on the selected prims, recomputed on each call
+    ManipulatorEditability ComputeEditability(const Viewport &viewport) const;
 
   private:
     void ProjectMouseOnAxis(const Viewport &viewport, GfVec3d &closestPoint);

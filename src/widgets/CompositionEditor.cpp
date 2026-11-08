@@ -522,7 +522,7 @@ inline void DrawSdfPathSummary(std::string &&header, SdfListOpType operation, co
     }
     ImGui::SameLine();
     std::string summary = path.GetString();
-    if (ImGui::SmallButton(summary.c_str())) {
+    if (NavigationLink(summary.c_str())) {
         SelectArcType(primSpec, path);
     }
     if (ImGui::BeginPopupContextItem()) {
@@ -547,7 +547,7 @@ inline void DrawAssetPathSummary(std::string &&header, SdfListOpType operation, 
     summary += assetPath.GetAssetPath().empty() ? "" : "@" + assetPath.GetAssetPath() + "@";
     summary += assetPath.GetPrimPath().GetString().empty() ? "" : "<" + assetPath.GetPrimPath().GetString() + ">";
     ImGui::PushID(menuItemId++);
-    if(ImGui::Button(summary.c_str())) {
+    if (NavigationLink(summary.c_str())) {
         SelectArcType(primSpec, assetPath);
     }
     if (ImGui::BeginPopupContextItem("###AssetPathMenuItems")) {
@@ -597,8 +597,9 @@ void DrawPathInRow(SdfListOpType operation, const ArcT &assetPath, const SdfPrim
     std::string path;
     path += GetArcSummary(assetPath);
     ImGui::PushID((*itemId)++);
-    ImGui::SameLine();
-    if(ImGui::Button(path.c_str())) {
+    // The caller zeroes ItemSpacing, links have no frame padding to separate them
+    ImGui::SameLine(0, ImGui::GetStyle().FramePadding.x * 2);
+    if (NavigationLink(path.c_str())) {
         SelectArcType(primSpec, assetPath);
     }
     if (ImGui::BeginPopupContextItem("###AssetPathMenuItems")) {
@@ -635,7 +636,7 @@ void DrawPrimCompositionSummary(const SdfPrimSpecHandle &primSpec) {
     CREATE_COMPOSITION_BUTTON(Reference, Ref, Reference)
     CREATE_COMPOSITION_BUTTON(Payload, Pay, Payload)
     CREATE_COMPOSITION_BUTTON(InheritPath, Inh, InheritPath)
-    CREATE_COMPOSITION_BUTTON(Specialize, Inh, Specializes)
+    CREATE_COMPOSITION_BUTTON(Specialize, Spe, Specializes)
 
     // TODO: stretch each paths to match the cell size. Add ellipsis at the beginning if they are too short
     // The idea is to see the relevant informations, and be able to quicly click on them

@@ -1,5 +1,7 @@
 #include "PositionManipulator.h"
 #include "Commands.h"
+#include "UsdHelpers.h"
+#include "ManipulatorEditability.h"
 #include "Constants.h"
 #include "GeometricFunctions.h"
 #include "Gui.h"
@@ -28,12 +30,21 @@
 
 static constexpr float axisSize = 100.f;
 
+/// The op written through UsdGeomXformCommonAPI
+static bool IsEditedOpType(UsdGeomXformOp::Type type) { return type == UsdGeomXformOp::TypeTranslate; }
+
+ManipulatorEditability PositionManipulator::ComputeEditability(const Viewport &viewport) const {
+    return ComputeManipulatorEditability(_selectedXformables, viewport.GetCurrentTimeCode(), IsEditedOpType);
+}
+
 PositionManipulator::PositionManipulator() : _selectedAxis(None) {}
 
 PositionManipulator::~PositionManipulator() {}
 
 bool PositionManipulator::IsMouseOver(const Viewport &viewport) {
 
+    const bool blocked = ComputeEditability(viewport).state == ManipulatorEditability::Blocked;
+    // A blocked gizmo is still hit tested, hovering it shows the HUD but it can't be dragged
     if (_xformAPI || _xformable) {
         const auto &frustum = viewport.GetViewportCamera().GetFrustum();
         const auto mv = frustum.ComputeViewMatrix();
@@ -63,13 +74,13 @@ bool PositionManipulator::IsMouseOver(const Viewport &viewport) {
         // TODO: it looks like USD has function to compute segment, have a look !
         if (IntersectsSegment(xAxisOnScreen, originOnScreen, mousePosition, pickBounds)) {
             _selectedAxis = XAxis;
-            return true;
+            return !blocked;
         } else if (IntersectsSegment(yAxisOnScreen, originOnScreen, mousePosition, pickBounds)) {
             _selectedAxis = YAxis;
-            return true;
+            return !blocked;
         } else if (IntersectsSegment(zAxisOnScreen, originOnScreen, mousePosition, pickBounds)) {
             _selectedAxis = ZAxis;
-            return true;
+            return !blocked;
         }
     }
     _selectedAxis = None;
@@ -141,13 +152,6 @@ inline void DrawArrow(ImDrawList *drawList, ImVec2 ori, ImVec2 tip, const ImVec4
     drawList->AddTriangleFilled(pt1, pt2, tip, ImColor(color));
 }
 
-template <int Axis> inline ImColor AxisColor(int selectedAxis) {
-    if (selectedAxis == Axis) {
-        return ImColor(ImVec4(1.0, 1.0, 0.0, 1.0));
-    } else {
-        return ImColor(ImVec4(Axis == Manipulator::XAxis, Axis == Manipulator::YAxis, Axis == Manipulator::ZAxis, 1.0));
-    }
-}
 
 void PositionManipulator::OnDrawFrame(const Viewport &viewport) {
 
@@ -169,6 +173,9 @@ void PositionManipulator::OnDrawFrame(const Viewport &viewport) {
         const GfVec4d yAxis3d = GfVec4d(0.0, axisLength, 0.0, 1.0) * toWorld;
         const GfVec4d zAxis3d = GfVec4d(0.0, 0.0, axisLength, 1.0) * toWorld;
 
+        // Before the ImGuiViewport below shadows the viewport
+        const ManipulatorEditability editability = ComputeEditability(viewport);
+        const bool showHud = _selectedAxis != None && viewport.IsInMouseHoverState(); // hovered, not dragged nor orbiting
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImGuiViewport *viewport = ImGui::GetMainViewport();
         auto textureSize = GfVec2d(viewport->WorkSize[0], viewport->WorkSize[1]);
@@ -178,14 +185,14 @@ void PositionManipulator::OnDrawFrame(const Viewport &viewport) {
         const auto yAxisOnScreen = ProjectToTextureScreenSpace(mv, proj, textureSize, GfVec3d(yAxis3d.data()));
         const auto zAxisOnScreen = ProjectToTextureScreenSpace(mv, proj, textureSize, GfVec3d(zAxis3d.data()));
 
-        // TODO : Draw grey if not editable
-
         DrawArrow(drawList, ImVec2(originOnScreen[0], originOnScreen[1]), ImVec2(xAxisOnScreen[0], xAxisOnScreen[1]),
-                  AxisColor<XAxis>(_selectedAxis), 3);
+                  ManipulatorAxisColor(XAxis, _selectedAxis, editability.state), 3);
         DrawArrow(drawList, ImVec2(originOnScreen[0], originOnScreen[1]), ImVec2(yAxisOnScreen[0], yAxisOnScreen[1]),
-                  AxisColor<YAxis>(_selectedAxis), 3);
+                  ManipulatorAxisColor(YAxis, _selectedAxis, editability.state), 3);
         DrawArrow(drawList, ImVec2(originOnScreen[0], originOnScreen[1]), ImVec2(zAxisOnScreen[0], zAxisOnScreen[1]),
-                  AxisColor<ZAxis>(_selectedAxis), 3);
+                  ManipulatorAxisColor(ZAxis, _selectedAxis, editability.state), 3);
+        if (showHud)
+            DrawManipulatorEditabilityHud(editability);
     }
 }
 
@@ -235,6 +242,8 @@ Manipulator *PositionManipulator::OnUpdate(Viewport &viewport) {
         // Apply the same delta to every selected xformable
         for (size_t i = 0; i < _selectedXformables.size(); ++i) {
             auto &xf = _selectedXformables[i];
+            if (!IsPrimEditable(xf.GetPrim()))
+                continue; // USD refuses the edit, the HUD explains why
             GfVec3d translation = _translationsOnBegin[i];
             translation[_selectedAxis] += delta;
 

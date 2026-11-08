@@ -41,6 +41,10 @@ struct EditorSettings {
     /// window manager where those patches don't apply: navigation then keeps a normal visible cursor.
     bool _hideCursorWhenNavigating = true;
 
+    /// When true (default), a file dropped from the OS opens as a stage, which is what a new user expects.
+    /// When false, it opens as a layer in the layer editors (the historical behavior).
+    bool _dropOpensStage = true;
+
     int _mainWindowWidth;
     int _mainWindowHeight;
     float _uiScale = 1.f;
