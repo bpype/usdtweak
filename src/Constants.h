@@ -21,6 +21,7 @@ constexpr float TimeBeforeTooltip = 2.f; // 2 seconds
 #define ColorAttributeUnauthored {0.5, 0.5, 0.5, 1.0}
 #define ColorAttributeRelationship {0.5, 0.5, 0.9, 1.0}
 #define ColorAttributeConnection {1.0, 1.0, 0.7, 1.0}
+#define ColorAttributeShadowed {0.95, 0.55, 0.35, 1.0} // value hidden by an opinion stronger than the edit target
 #define ColorMiniButtonAuthored {0.0, 1.0, 0.0, 1.0}
 #define ColorMiniButtonUnauthored {0.6, 0.6, 0.6, 1.0}
 #define ColorTransparent {0.0, 0.0, 0.0, 0.0}

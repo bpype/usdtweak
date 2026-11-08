@@ -453,7 +453,7 @@ void DrawPrimType(const SdfPrimSpecHandle &primSpec, ImGuiComboFlags comboFlags)
 template <typename T> static inline void DrawArrayEditorButton(T attribute) {
     if ((*attribute)->GetDefaultValue().IsArrayValued()) {
         if (ImGui::Button(ICON_FA_LIST)) {
-            ExecuteAfterDraw<EditorSelectAttributePath>((*attribute)->GetPath());
+            ExecuteAfterDraw<EditorOpenAttributeEditor>((*attribute)->GetPath());
         }
         ImGui::SameLine();
     }

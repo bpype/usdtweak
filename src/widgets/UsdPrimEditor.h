@@ -4,7 +4,8 @@
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
-void DrawAttributeValueAtTime(UsdAttribute &attribute, UsdTimeCode currentTime = UsdTimeCode::Default());
+void DrawAttributeValueAtTime(UsdAttribute &attribute, UsdTimeCode currentTime = UsdTimeCode::Default(),
+                              bool editable = true);
 void DrawUsdPrimProperties(UsdPrim &obj, UsdTimeCode currentTime = UsdTimeCode::Default());
 
 /// Should go in TransformEditor.h

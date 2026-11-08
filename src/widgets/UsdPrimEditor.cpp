@@ -23,6 +23,7 @@
 #include "VtValueEditor.h"
 #include "Constants.h"
 #include "Commands.h"
+#include "UsdHelpers.h"
 #include "ImGuiHelpers.h"
 #include "TableLayouts.h"
 #include "AssetPathBrowserDialog.h" // includes ModalDialogs.h
@@ -149,6 +150,44 @@ struct CreateRelationshipDialog : public ModalDialog {
 
 };
 
+/// Disabled items don't report hovering, but imgui still records the disabled item under the mouse.
+/// Shows the reason when that item is in the current window, its children or the popups opened from them.
+static void DrawEditBlockedTooltip(const std::string &reason) {
+    const ImGuiContext &g = *GImGui;
+    if (reason.empty() || g.HoveredId == 0 || !g.HoveredIdIsDisabled || !g.HoveredWindow)
+        return;
+    if (ImGui::IsWindowChildOf(g.HoveredWindow, ImGui::GetCurrentWindow(), true, false)) {
+        ImGui::SetTooltip("%s", reason.c_str());
+    }
+}
+
+/// One line under the header explaining why everything is greyed
+static void DrawEditBlockedBanner(const std::string &reason) {
+    if (reason.empty())
+        return;
+    const std::string firstLine = reason.substr(0, reason.find('\n'));
+    ImGui::TextColored(ImVec4(ColorHighlight), ICON_FA_LOCK " %s", firstLine.c_str());
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", reason.c_str());
+    }
+}
+
+/// Why an edit of the attribute value won't show, with the way to fix it from the property editor, empty when it will show
+static std::string GetShadowedValueReason(const UsdAttribute &attribute, UsdTimeCode time,
+                                          const OpinionStrength &editTargetStrength) {
+    const std::optional<ShadowingOpinion> opinion = FindShadowingOpinion(attribute, time, editTargetStrength);
+    if (!opinion)
+        return {};
+    return FormatShadowingOpinion(*opinion, attribute.GetStage()) + "\nUse (a) > Edit strongest opinion to edit it there.";
+}
+
+/// The shadowed value tooltip shows when hovering the value column of the current row
+static void DrawShadowedValueTooltip(const std::string &reason) {
+    if (!reason.empty() && ImGui::TableGetHoveredColumn() == 2 && ImGui::TableGetHoveredRow() == ImGui::TableGetRowIndex()) {
+        ImGui::SetTooltip("%s", reason.c_str());
+    }
+}
+
 /// Select and draw the appropriate editor depending on the type, metada and so on.
 /// Returns the modified value or VtValue
 static VtValue DrawAttributeValue(const std::string &label, UsdAttribute &attribute, const VtValue &value) {
@@ -201,20 +240,22 @@ void DrawAttributeDisplayName(const UsdAttribute &attribute) {
 // Connected attribute path, clicking on it selects its prim
 static void DrawConnectionLink(const UsdStageWeakPtr &stage, const SdfPath &path) {
     ScopedStyleColor linkColor(ImGuiCol_Text, ImVec4(ColorAttributeConnection));
-    if (ImGui::Selectable((ICON_FA_LINK " " + path.GetString()).c_str())) {
+    if (NavigationLink((ICON_FA_LINK " " + path.GetString()).c_str())) {
         ExecuteAfterDraw<EditorSetSelection>(stage, path.GetPrimPath());
     }
 }
 
 // Connections of the attribute, with a button to remove them
-static bool DrawAttributeConnections(const UsdAttribute &attribute) {
+static bool DrawAttributeConnections(const UsdAttribute &attribute, bool editable) {
     SdfPathVector sources;
     attribute.GetConnections(&sources);
     for (auto &connection : sources) {
         ImGui::PushID(connection.GetString().c_str());
+        ImGui::BeginDisabled(!editable);
         if (ImGui::Button(ICON_FA_TRASH)) {
             ExecuteAfterDraw(&UsdAttribute::RemoveConnection, attribute, connection);
         }
+        ImGui::EndDisabled();
         ImGui::SameLine();
         DrawConnectionLink(attribute.GetStage(), connection);
         ImGui::PopID();
@@ -222,7 +263,7 @@ static bool DrawAttributeConnections(const UsdAttribute &attribute) {
     return !sources.empty();
 }
 
-void DrawAttributeValueAtTime(UsdAttribute &attribute, UsdTimeCode currentTime) {
+void DrawAttributeValueAtTime(UsdAttribute &attribute, UsdTimeCode currentTime, bool editable) {
     const std::string attributeLabel = GetDisplayName(attribute);
     VtValue value;
     // TODO: On the lower spec mac, this call appears to be really slow with some attributes
@@ -230,14 +271,16 @@ void DrawAttributeValueAtTime(UsdAttribute &attribute, UsdTimeCode currentTime) 
     const bool HasValue = attribute.Get(&value, currentTime);
 
     if (HasValue) {
+        ImGui::BeginDisabled(!editable);
         VtValue modified = DrawAttributeValue(attributeLabel, attribute, value);
+        ImGui::EndDisabled();
         if (!modified.IsEmpty()) {
             ExecuteAfterDraw<AttributeSet>(attribute, modified,
                                            attribute.GetNumTimeSamples() ? currentTime : UsdTimeCode::Default());
         }
     }
 
-    const bool HasConnections = attribute.HasAuthoredConnections() && DrawAttributeConnections(attribute);
+    const bool HasConnections = attribute.HasAuthoredConnections() && DrawAttributeConnections(attribute, editable);
 
     if (!HasValue && !HasConnections) {
         ImGui::TextColored(ImVec4({0.5, 0.5, 0.5, 0.5}), "no value");
@@ -250,7 +293,7 @@ void DrawUsdRelationshipDisplayName(const UsdRelationship &relationship) {
     ImGui::TextColored(ImVec4(attributeNameColor), "%s", relationshipName.c_str());
 }
 
-void DrawUsdRelationshipList(const UsdRelationship &relationship) {
+void DrawUsdRelationshipList(const UsdRelationship &relationship, bool editable) {
     SdfPathVector targets;
     // relationship.GetForwardedTargets(&targets);
     // for (const auto &path : targets) {
@@ -262,6 +305,7 @@ void DrawUsdRelationshipList(const UsdRelationship &relationship) {
         if (ImGui::BeginListBox("##Relationship", ImVec2(-FLT_MIN, targets.size() * 25))) {
             for (const auto &path : targets) {
                 ImGui::PushID(path.GetString().c_str());
+                ImGui::BeginDisabled(!editable);
                 if (ImGui::Button(ICON_FA_TRASH)) {
                     ExecuteAfterDraw(&UsdRelationship::RemoveTarget, relationship, path);
                 }
@@ -272,6 +316,7 @@ void DrawUsdRelationshipList(const UsdRelationship &relationship) {
                     // RemoveTarget and add newTarget
                     ExecuteAfterDraw<RelationshipReplace>(relationship, path, SdfPath(buffer));
                 }
+                ImGui::EndDisabled();
                 ImGui::PopID();
             }
             ImGui::EndListBox();
@@ -404,17 +449,21 @@ template <> void DrawMenuCreateValue(UsdRelationship &relationship) {
 
 // Property mini button, should work with UsdProperty, UsdAttribute and UsdRelationShip
 template <typename UsdPropertyT>
-void DrawPropertyMiniButton(UsdPropertyT &property, const UsdEditTarget &editTarget, UsdTimeCode currentTime) {
+void DrawPropertyMiniButton(UsdPropertyT &property, const UsdEditTarget &editTarget, UsdTimeCode currentTime,
+                            bool editable) {
     ImVec4 propertyColor =
         property.IsAuthoredAt(editTarget) ? ImVec4(ColorMiniButtonAuthored) : ImVec4(ColorMiniButtonUnauthored);
     DrawPropertyMiniButton(SmallButtonLabel<UsdPropertyT>(), propertyColor);
     if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+        // The authoring entries are greyed, the copy and navigation ones stay available
+        ImGui::BeginDisabled(!editable);
         DrawMenuSetKey(property, currentTime);
         DrawMenuCreateValue(property);
         DrawMenuClearAuthoredValues(property);
         DrawMenuBlockValues(property);
         DrawMenuRemoveProperty(property);
         DrawMenuEditConnection(property);
+        ImGui::EndDisabled();
         if (ImGui::MenuItem(ICON_FA_COPY " Copy attribute path")) {
             ImGui::SetClipboardText(property.GetPath().GetString().c_str());
         }
@@ -444,6 +493,7 @@ bool DrawVariantSetsCombos(UsdPrim &prim) {
 
     const SdfPath targetPath = editTarget.MapToSpecPath(prim.GetPath());
     const bool editingInVariant = targetPath.ContainsPrimVariantSelection();
+    const bool editable = IsPrimEditable(prim);
 
     if (editingInVariant) {
         ImGui::BeginDisabled(true);
@@ -476,7 +526,7 @@ bool DrawVariantSetsCombos(UsdPrim &prim) {
                 if (ImGui::MenuItem("Edit strongest opinion")) {
                     SetEditTargetOnVariantSetStrongestOpinion(prim, variantSetName);
                 }
-                if (ImGui::MenuItem("Clear variant selection")) {
+                if (ImGui::MenuItem("Clear variant selection", nullptr, false, editable)) {
                     ExecuteAfterDraw(&UsdVariantSet::ClearVariantSelection, variantSet);
                 }
                 ImGui::EndPopup();
@@ -487,6 +537,7 @@ bool DrawVariantSetsCombos(UsdPrim &prim) {
 
             ImGui::TableSetColumnIndex(2);
             ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::BeginDisabled(!editable);
             if (ImGui::BeginCombo(variantSetName.c_str(), variantSet.GetVariantSelection().c_str())) {
                 for (auto variant : variantSet.GetVariantNames()) {
                     if (ImGui::Selectable(variant.c_str(), false)) {
@@ -495,6 +546,7 @@ bool DrawVariantSetsCombos(UsdPrim &prim) {
                 }
                 ImGui::EndCombo();
             }
+            ImGui::EndDisabled();
             ImGui::PopItemWidth();
         }
         ImGui::EndTable();
@@ -506,9 +558,6 @@ bool DrawVariantSetsCombos(UsdPrim &prim) {
     }
     return true;
 }
-
-/// Metadata can't be authored on instance proxies and prototypes, USD refuses the edit.
-static bool CanEditPrimMetadata(const UsdPrim &prim) { return !prim.IsInstanceProxy() && !prim.IsInPrototype(); }
 
 /// Clearing only removes the opinion in the edit target, so that's what we check, not the composed value.
 static bool IsAuthoredInEditTarget(const UsdPrim &prim, const TfToken &field) {
@@ -576,7 +625,7 @@ bool DrawPrimMetadata(UsdPrim &prim) {
         ImGui::TableSetupColumn("Prim metadata");
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
-        ImGui::BeginDisabled(!CanEditPrimMetadata(prim));
+        ImGui::BeginDisabled(!IsPrimEditable(prim));
         DrawPrimKindRow(prim);
         DrawPrimActiveRow(prim);
         DrawPrimInstanceableRow(prim);
@@ -603,7 +652,7 @@ static void DrawPrimTypeCombo(const UsdPrim &prim) {
     const auto &allTypes = GetAllSpecTypeNames();
     static int selected = 0;
 
-    ImGui::BeginDisabled(!CanEditPrimMetadata(prim));
+    ImGui::BeginDisabled(!IsPrimEditable(prim));
     ImGui::SetNextItemWidth(ImGui::CalcTextSize(preview).x + ImGui::GetStyle().FramePadding.x * 2.f);
     // The popup is as wide as the combo by default, which is too narrow to read the types
     const float popupSize = ImGui::GetFontSize() * 20.f;
@@ -627,6 +676,7 @@ bool DrawAssetInfo(UsdPrim &prim) {
     if (assetInfo.empty())
         return false;
 
+    const bool editable = IsPrimEditable(prim);
     if (ImGui::BeginTable("##DrawAssetInfo", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
         //TODO  make it relative
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, GetMiniButtonSize());
@@ -644,7 +694,9 @@ bool DrawAssetInfo(UsdPrim &prim) {
             ImGui::Text("%s", keyValue->first.c_str());
             ImGui::TableSetColumnIndex(2);
             ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::BeginDisabled(!editable);
             VtValue modified = DrawVtValue(keyValue->first, keyValue->second);
+            ImGui::EndDisabled();
             if (!modified.IsEmpty()) {
                 ExecuteAfterDraw(&UsdPrim::SetAssetInfoByKey, prim, TfToken(keyValue->first), modified);
             }
@@ -751,6 +803,7 @@ bool DrawMaterialBindings(const UsdPrim &prim) {
         return false;
 
     UsdShadeMaterialBindingAPI materialBindingAPI(prim);
+    const bool editable = IsPrimEditable(prim);
     if (ImGui::BeginTable("##DrawPropertyEditorHeader", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, GetMiniButtonSize());
         ImGui::TableSetupColumn("Material Bindings");
@@ -771,9 +824,11 @@ bool DrawMaterialBindings(const UsdPrim &prim) {
                 bool isAuthoredAtEditTarget = bindingRel && bindingRel.IsAuthoredAt(prim.GetStage()->GetEditTarget());
                 ImVec4 cogColor = isAuthoredAtEditTarget ? ImVec4(ColorMiniButtonAuthored) : ImVec4(ColorAttributeAuthored);
                 ScopedStyleColor cogStyle(ImGuiCol_Text, cogColor, ImGuiCol_Button, ImVec4(ColorTransparent));
+                ImGui::BeginDisabled(!editable);
                 if (ImGui::Button(ICON_FA_PALETTE)) {
                     ImGui::OpenPopup("MaterialList");
                 }
+                ImGui::EndDisabled();
             }
             // TODO: we would like to copy/paste material path
             static MaterialList materialList; // We expect only one thread running this code
@@ -796,10 +851,10 @@ bool DrawMaterialBindings(const UsdPrim &prim) {
             if (material) {
                 // TODO: we would also like to copy/paste material path
                 ImVec4 textColor = hasDirectBinding ? ImVec4(ColorAttributeAuthored) : ImVec4(ColorAttributeUnauthored);
-                ScopedStyleColor buttonStyle(ImGuiCol_Button, ImVec4(ColorTransparent), ImGuiCol_Text, textColor);
-                if (ImGui::Button(material.GetPrim().GetPath().GetText())) {
+                ScopedStyleColor linkColor(ImGuiCol_Text, textColor);
+                if (NavigationLink(material.GetPrim().GetPath().GetText())) {
                     ExecuteAfterDraw<EditorSetSelection>(material.GetPrim().GetStage(), material.GetPrim().GetPath());
-                };
+                }
             } else {
                 ImGui::Text("unbound");
             }
@@ -1007,9 +1062,13 @@ void DrawUsdPrimHeader(UsdPrim &prim) {
 
         DrawPrimTypeCombo(prim);
         ImGui::TableSetColumnIndex(2);
+        const bool editable = IsPrimEditable(prim);
+        ImGui::BeginDisabled(!editable);
         if (DrawPropertyMiniButton(ICON_FA_EDIT)) {
             editSchemas = !editSchemas;
         }
+        ImGui::EndDisabled();
+        editSchemas = editSchemas && editable;
         //ImGui::Text("Schemas"); TODO Hint
         ImGui::SameLine();
         ImGui::PushItemWidth(-FLT_MIN);
@@ -1017,6 +1076,105 @@ void DrawUsdPrimHeader(UsdPrim &prim) {
         ImGui::PopID(); // "Schemas"
         ImGui::EndTable();
     }
+}
+
+/// All the children, including inactive, undefined and instance proxies, so the navigation can reach any prim
+static Usd_PrimFlagsPredicate NavigatorChildrenPredicate() { return UsdTraverseInstanceProxies(UsdPrimAllPrimsPredicate); }
+
+static std::vector<UsdPrim> GetNavigatorChildren(const UsdPrim &prim) {
+    const UsdPrimSiblingRange children = prim.GetFilteredChildren(NavigatorChildrenPredicate());
+    return std::vector<UsdPrim>(children.begin(), children.end());
+}
+
+/// Width fitting the longest name, an auto-resizing popup can't size a child window from its content
+static float GetChildrenListWidth(const std::vector<UsdPrim> &children) {
+    float width = 0.f;
+    for (const UsdPrim &child : children) {
+        width = std::max(width, ImGui::CalcTextSize(child.GetName().GetText()).x);
+    }
+    return width + ImGui::GetStyle().ScrollbarSize + 2 * ImGui::GetStyle().WindowPadding.x;
+}
+
+/// Clipped list of children, clicking one selects it
+static void DrawChildrenList(const UsdPrim &prim, const std::vector<UsdPrim> &children) {
+    constexpr int maxVisibleLines = 15;
+    const int visibleLines = std::min(static_cast<int>(children.size()), maxVisibleLines);
+    // No spacing after the last line, and child windows have no padding by default
+    const float listHeight = visibleLines * ImGui::GetTextLineHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("##Children", ImVec2(GetChildrenListWidth(children), listHeight));
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(children.size()));
+    while (clipper.Step()) {
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const UsdPrim &child = children[i];
+            ScopedStyleColor childColor(ImGuiCol_Text, GetPrimColor(child));
+            ImGui::PushID(i);
+            if (ImGui::Selectable(child.GetName().GetText())) {
+                ExecuteAfterDraw<EditorSetSelection>(prim.GetStage(), child.GetPath());
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+}
+
+/// Popup listing the children of the prim
+static void DrawChildrenPopup(const UsdPrim &prim) {
+    if (!ImGui::BeginPopup("##ChildrenPopup")) {
+        return;
+    }
+    {
+        // The breadcrumb pushes the prim color and a transparent button, restore the defaults for the popup.
+        // Scoped so the colors are popped before EndPopup, ImGui asserts on colors leaking out of a window.
+        ScopedStyleColor defaultStyle(DefaultColorStyle);
+        DrawChildrenList(prim, GetNavigatorChildren(prim));
+    }
+    ImGui::EndPopup();
+}
+
+/// Last element of the breadcrumb: opens the children popup, or plain text when there is nothing to navigate to
+static void DrawNavigatorLastElement(const UsdPrim &prim, const char *label) {
+    if (prim.GetFilteredChildren(NavigatorChildrenPredicate()).empty()) {
+        ImGui::Text("%s", label);
+        return;
+    }
+    const std::string buttonLabel = std::string(label) + " " ICON_FA_CARET_DOWN;
+    if (ImGui::SmallButton(buttonLabel.c_str())) {
+        ImGui::OpenPopup("##ChildrenPopup");
+    }
+    DrawChildrenPopup(prim);
+}
+
+/// Path of the prim, each ancestor is a link selecting it, the prim itself opens the list of its children
+static void DrawNavigatorBreadcrumb(const UsdPrim &prim) {
+    const std::vector<SdfPath> prefixes = prim.GetPrimPath().GetPrefixes();
+    ScopedStyleColor buttonStyle(ImGuiCol_Button, ImVec4(ColorTransparent));
+    ScopedStyleColor pathColor(ImGuiCol_Text, GetPrimColor(prim));
+    ImGui::BeginChild("##Navigation", ImVec2(-FLT_MIN, ImGui::GetFrameHeight()));
+    ImGui::AlignTextToFramePadding();
+    if (prefixes.empty()) { // pseudo root
+        DrawNavigatorLastElement(prim, "/");
+        ImGui::EndChild();
+        return;
+    }
+    ImGui::Text("/");
+    const int lastIndex = static_cast<int>(prefixes.size()) - 1;
+    for (int i = 0; i <= lastIndex; ++i) {
+        ImGui::SameLine(0, 0);
+        ImGui::PushID(i);
+        if (i == lastIndex) {
+            DrawNavigatorLastElement(prim, prefixes[i].GetName().c_str());
+        } else {
+            if (NavigationLink(prefixes[i].GetName().c_str())) {
+                ExecuteAfterDraw<EditorSetSelection>(prim.GetStage(), prefixes[i]);
+            }
+            ImGui::SameLine(0, 0);
+            ImGui::Text("/");
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
 }
 
 void DrawNavigator(UsdPrim &prim) {
@@ -1036,27 +1194,8 @@ void DrawNavigator(UsdPrim &prim) {
 
         if (prim) {
             ImGui::TableSetColumnIndex(1);
-            const SdfPath primPath = prim.GetPrimPath();
-            const std::vector<SdfPath> prefixes = primPath.GetPrefixes();
-
             ImGui::SameLine();
-            ScopedStyleColor buttonStyle(ImGuiCol_Button, ImVec4(ColorTransparent));
-            ScopedStyleColor pathColor(ImGuiCol_Text, GetPrimColor(prim));
-            ImGui::BeginChild("##Navigation", ImVec2(-FLT_MIN, ImGui::GetFrameHeight()));
-            ImGui::Text("/");
-            for (int i = 0; i < static_cast<int>(prefixes.size()); ++i) {
-                ImGui::SameLine(0, 0);
-                ImGui::PushID(i);
-                if (ImGui::SmallButton(prefixes[i].GetName().c_str())) {
-                    ExecuteAfterDraw<EditorSetSelection>(prim.GetStage(), prefixes[i]);
-                }
-                if (i < static_cast<int>(prefixes.size()) - 1) {
-                    ImGui::SameLine(0, 0);
-                    ImGui::Text("/");
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndChild();
+            DrawNavigatorBreadcrumb(prim);
         }
         ImGui::EndTable();
     }
@@ -1200,7 +1339,8 @@ static void DrawShaderPropertyName(const TfToken &name, SdrShaderPropertyConstPt
 }
 
 static void DrawShaderInputRow(const UsdPrim &prim, const TfToken &name, SdrShaderPropertyConstPtr property,
-                               const UsdEditTarget &editTarget, UsdTimeCode currentTime) {
+                               const UsdEditTarget &editTarget, UsdTimeCode currentTime, bool editable,
+                               const OpinionStrength &editTargetStrength) {
     const TfToken attributeName(UsdShadeTokens->inputs.GetString() + name.GetString());
     const SdfValueTypeName type = GetShaderPropertySdfType(property);
     UsdAttribute attribute = prim.GetAttribute(attributeName);
@@ -1219,11 +1359,11 @@ static void DrawShaderInputRow(const UsdPrim &prim, const TfToken &name, SdrShad
 
     ImGui::TableSetColumnIndex(0);
     if (attribute) {
-        DrawPropertyMiniButton(attribute, editTarget, currentTime);
+        DrawPropertyMiniButton(attribute, editTarget, currentTime, editable);
     } else {
         DrawPropertyMiniButton(SmallButtonLabel<UsdAttribute>());
         if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-            if (ImGui::MenuItem(ICON_FA_PLUS_CIRCLE " Create value", nullptr, false, !value.IsEmpty())) {
+            if (ImGui::MenuItem(ICON_FA_PLUS_CIRCLE " Create value", nullptr, false, editable && !value.IsEmpty())) {
                 CreateShaderAttribute(prim, attributeName, type, value);
             }
             ImGui::EndPopup();
@@ -1235,12 +1375,18 @@ static void DrawShaderInputRow(const UsdPrim &prim, const TfToken &name, SdrShad
 
     ImGui::TableSetColumnIndex(2);
     ImGui::PushItemWidth(-FLT_MIN);
+    const std::string shadowedReason =
+        attribute ? GetShadowedValueReason(attribute, currentTime, editTargetStrength) : std::string();
     if (!value.IsEmpty()) {
         VtValue modified;
         {
-            ScopedStyleColor defaultValueColor(ImGuiCol_Text,
-                                               hasValue ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : ImVec4(ColorAttributeUnauthored));
+            const ImVec4 valueColor = !shadowedReason.empty() ? ImVec4(ColorAttributeShadowed)
+                                      : hasValue              ? ImGui::GetStyleColorVec4(ImGuiCol_Text)
+                                                              : ImVec4(ColorAttributeUnauthored);
+            ScopedStyleColor defaultValueColor(ImGuiCol_Text, valueColor);
+            ImGui::BeginDisabled(!editable);
             modified = DrawShaderInputValue(attributeName.GetString(), attribute, property, type, value);
+            ImGui::EndDisabled();
         }
         if (!modified.IsEmpty()) {
             if (attribute) {
@@ -1254,15 +1400,16 @@ static void DrawShaderInputRow(const UsdPrim &prim, const TfToken &name, SdrShad
         ImGui::TextColored(ImVec4(ColorAttributeUnauthored), "no value");
     }
     if (attribute && attribute.HasAuthoredConnections()) {
-        DrawAttributeConnections(attribute);
+        DrawAttributeConnections(attribute, editable);
     }
+    DrawShadowedValueTooltip(shadowedReason);
     ImGui::PopItemWidth();
     ImGui::PopID();
 }
 
 static void DrawShaderOutputRow(const UsdPrim &prim, const TfToken &name, SdrShaderPropertyConstPtr property,
                                 const UsdEditTarget &editTarget, UsdTimeCode currentTime,
-                                ShadingNetworkConnections &connections) {
+                                ShadingNetworkConnections &connections, bool editable) {
     const TfToken attributeName(UsdShadeTokens->outputs.GetString() + name.GetString());
     const SdfValueTypeName type = GetShaderPropertySdfType(property);
     UsdAttribute attribute = prim.GetAttribute(attributeName);
@@ -1270,11 +1417,11 @@ static void DrawShaderOutputRow(const UsdPrim &prim, const TfToken &name, SdrSha
     ImGui::TableNextRow(ImGuiTableRowFlags_None, TableRowMinHeight);
     ImGui::TableSetColumnIndex(0);
     if (attribute) {
-        DrawPropertyMiniButton(attribute, editTarget, currentTime);
+        DrawPropertyMiniButton(attribute, editTarget, currentTime, editable);
     } else {
         DrawPropertyMiniButton(SmallButtonLabel<UsdAttribute>());
         if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-            if (ImGui::MenuItem(ICON_FA_PLUS_CIRCLE " Create output")) {
+            if (ImGui::MenuItem(ICON_FA_PLUS_CIRCLE " Create output", nullptr, false, editable)) {
                 CreateShaderAttribute(prim, attributeName, type, VtValue());
             }
             ImGui::EndPopup();
@@ -1303,6 +1450,8 @@ static bool DrawShaderParameters(const UsdPrim &prim, UsdTimeCode currentTime) {
     }
     static ShadingNetworkConnections connections;
     const UsdEditTarget &editTarget = prim.GetStage()->GetEditTarget();
+    const bool editable = IsPrimEditable(prim);
+    const OpinionStrength editTargetStrength = editable ? GetEditTargetStrength(prim) : OpinionStrength();
 
     // Pages in the order of their first input, the inputs without page come first
     std::vector<std::pair<TfToken, std::vector<TfToken>>> pages = {{TfToken(), {}}};
@@ -1332,13 +1481,14 @@ static bool DrawShaderParameters(const UsdPrim &prim, UsdTimeCode currentTime) {
             }
             if (pageOpen) {
                 for (const TfToken &name : names) {
-                    DrawShaderInputRow(prim, name, shaderNode->GetShaderInput(name), editTarget, currentTime);
+                    DrawShaderInputRow(prim, name, shaderNode->GetShaderInput(name), editTarget, currentTime, editable,
+                                       editTargetStrength);
                 }
             }
         }
         for (const TfToken &name : GetShaderDefinitionOutputNames(shaderNode)) {
             if (SdrShaderPropertyConstPtr property = shaderNode->GetShaderOutput(name)) {
-                DrawShaderOutputRow(prim, name, property, editTarget, currentTime, connections);
+                DrawShaderOutputRow(prim, name, property, editTarget, currentTime, connections, editable);
             }
         }
         ImGui::EndTable();
@@ -1351,12 +1501,19 @@ void DrawUsdPrimProperties(UsdPrim &prim, UsdTimeCode currentTime) {
     DrawPropertyEditorMenuBar(prim, 0);
     DrawNavigator(prim);
     if (prim) {
+        const std::string editBlockedReason = GetEditBlockedReason(prim);
         auto headerSize = ImGui::GetWindowSize();
         // 2 rows, the second one holds the type combo which adds the cell padding to the frame height
         headerSize.y = ImGui::GetFrameHeight() * 2 + ImGui::GetStyle().CellPadding.y * 2.f;
+        // The edit blocked banner stays in the header, visible while the body scrolls
+        if (!editBlockedReason.empty()) {
+            headerSize.y += ImGui::GetStyle().ItemSpacing.y + ImGui::GetTextLineHeight();
+        }
         headerSize.x = -FLT_MIN; // expand as much as possible
         ImGui::BeginChild("##Header", headerSize, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         DrawUsdPrimHeader(prim);
+        DrawEditBlockedBanner(editBlockedReason);
+        DrawEditBlockedTooltip(editBlockedReason);
         ImGui::EndChild();
         ImGui::Separator();
         ImGui::BeginChild("##Body");
@@ -1394,13 +1551,15 @@ void DrawUsdPrimProperties(UsdPrim &prim, UsdTimeCode currentTime) {
 
             int miniButtonId = 0;
             const auto &editTarget = prim.GetStage()->GetEditTarget();
+            const bool editable = IsPrimEditable(prim);
+            const OpinionStrength editTargetStrength = editable ? GetEditTargetStrength(prim) : OpinionStrength();
 
             // Draw attributes
             for (auto &attribute : prim.GetAttributes()) {
                 ImGui::TableNextRow(ImGuiTableRowFlags_None, TableRowMinHeight);
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushID(miniButtonId++);
-                DrawPropertyMiniButton(attribute, editTarget, currentTime);
+                DrawPropertyMiniButton(attribute, editTarget, currentTime, editable);
                 ImGui::PopID();
 
                 ImGui::TableSetColumnIndex(1);
@@ -1409,7 +1568,14 @@ void DrawUsdPrimProperties(UsdPrim &prim, UsdTimeCode currentTime) {
                 ImGui::TableSetColumnIndex(2);
                 ImGui::PushItemWidth(-FLT_MIN); // Right align and get rid of widget label
                 ImGui::PushID(attribute.GetPath().GetHash());
-                DrawAttributeValueAtTime(attribute, currentTime);
+                const std::string shadowedReason = GetShadowedValueReason(attribute, currentTime, editTargetStrength);
+                {
+                    const ImVec4 valueColor =
+                        shadowedReason.empty() ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : ImVec4(ColorAttributeShadowed);
+                    ScopedStyleColor shadowedColor(ImGuiCol_Text, valueColor);
+                    DrawAttributeValueAtTime(attribute, currentTime, editable);
+                }
+                DrawShadowedValueTooltip(shadowedReason);
                 ImGui::PopID();
                 ImGui::PopItemWidth();
                 // TODO: in the hint ???
@@ -1422,18 +1588,19 @@ void DrawUsdPrimProperties(UsdPrim &prim, UsdTimeCode currentTime) {
 
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushID(miniButtonId++);
-                DrawPropertyMiniButton(relationship, editTarget, currentTime);
+                DrawPropertyMiniButton(relationship, editTarget, currentTime, editable);
                 ImGui::PopID();
 
                 ImGui::TableSetColumnIndex(1);
                 DrawUsdRelationshipDisplayName(relationship);
 
                 ImGui::TableSetColumnIndex(2);
-                DrawUsdRelationshipList(relationship);
+                DrawUsdRelationshipList(relationship, editable);
             }
 
             ImGui::EndTable();
         }
+        DrawEditBlockedTooltip(editBlockedReason);
         ImGui::EndChild();
     }
 }
@@ -1490,10 +1657,12 @@ bool DrawXformsCommon(UsdPrim &prim, UsdTimeCode currentTime) {
         int rowId = 0;
         if (BeginThreeColumnsTable("##DrawXformsCommon")) {
             SetupThreeColumnsTable(true, "", "UsdGeomXformCommonAPI", "");
+            ImGui::BeginDisabled(!IsPrimEditable(prim));
             DrawThreeColumnsRow<XformCommonTranslateField>(rowId++, xformAPI, translation, currentTime);
             DrawThreeColumnsRow<XformCommonRotateField>(rowId++, xformAPI, rotation, rotOrder, currentTime);
             DrawThreeColumnsRow<XformCommonScaleField>(rowId++, xformAPI, scale, currentTime);
             DrawThreeColumnsRow<XformCommonPivotField>(rowId++, xformAPI, pivot, currentTime);
+            ImGui::EndDisabled();
             EndThreeColumnsTable();
         }
         return true;

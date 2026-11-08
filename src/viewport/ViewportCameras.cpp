@@ -3,8 +3,10 @@
 #include "Commands.h"
 #include "Gui.h"
 #include "ImGuiHelpers.h"
+#include "ResourcesLoader.h"
 #include "UsdHelpers.h"
 #include "Viewport.h"
+#include "ViewportSettings.h"
 #include <pxr/usd/usd/primRange.h>
 #include <pxr/usd/usd/stagePopulationMask.h>
 #include <pxr/usd/usdGeom/camera.h>
@@ -15,6 +17,56 @@
 const std::array<std::string, 7> ViewportCameras:: ViewportCameras::_cameraNames = {
     "Persp", "Top", "Bottom", "Right", "Left", "Front", "Back"
 };
+
+// Indexed by StageCameraNavigation
+static const char *stageCameraNavigationLabels[] = {"Locked", "Move Persp", "Editable"};
+static const char *stageCameraNavigationIcons[] = {ICON_FA_LOCK, ICON_FA_SHIELD_ALT, ICON_FA_LOCK_OPEN};
+static const char *stageCameraNavigationTooltips[] = {
+    "The camera can't be moved",
+    "Moving switches to a copy in Persp",
+    "Moving edits the camera",
+};
+static const char *stageCameraNavigationHelp = "Viewport navigation with a stage camera";
+
+void DrawStageCameraNavigationCombo(StageCameraNavigation &mode) {
+    const int current = static_cast<int>(mode);
+    if (ImGui::BeginCombo("Stage camera navigation", stageCameraNavigationLabels[current])) {
+        for (int i = 0; i < IM_ARRAYSIZE(stageCameraNavigationLabels); ++i) {
+            if (ImGui::Selectable(stageCameraNavigationLabels[i], i == current)) {
+                mode = static_cast<StageCameraNavigation>(i);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", stageCameraNavigationTooltips[i]);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", stageCameraNavigationHelp);
+    }
+}
+
+void DrawStageCameraNavigationButton(StageCameraNavigation &mode) {
+    const int current = static_cast<int>(mode);
+    if (ImGui::Button(stageCameraNavigationIcons[current])) {
+        ImGui::OpenPopup("##StageCameraNavigation");
+    }
+    if (ImGui::IsItemHovered() && !ImGui::IsPopupOpen("##StageCameraNavigation")) {
+        ImGui::SetTooltip("Camera navigation: %s", stageCameraNavigationLabels[current]);
+    }
+    if (ImGui::BeginPopup("##StageCameraNavigation")) {
+        for (int i = 0; i < IM_ARRAYSIZE(stageCameraNavigationLabels); ++i) {
+            const std::string label = std::string(stageCameraNavigationIcons[i]) + "  " + stageCameraNavigationLabels[i];
+            if (ImGui::MenuItem(label.c_str(), nullptr, i == current)) {
+                mode = static_cast<StageCameraNavigation>(i);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", stageCameraNavigationTooltips[i]);
+            }
+        }
+        ImGui::EndPopup();
+    }
+}
 
 static void DrawUsdGeomCameraEditor(const UsdGeomCamera &usdGeomCamera, UsdTimeCode keyframeTimeCode) {
     auto camera = usdGeomCamera.GetCamera(keyframeTimeCode);
@@ -70,6 +122,8 @@ static void DrawUsdGeomCameraEditor(const UsdGeomCamera &usdGeomCamera, UsdTimeC
         };
         ExecuteAfterDraw<UsdFunctionCall>(editTargetLayer, duplicateFn);
     }
+    ImGui::SameLine();
+    DrawStageCameraNavigationButton(ResourcesLoader::GetViewportSettings()._stageCameraNavigation);
 }
 
 inline
@@ -192,6 +246,12 @@ void ViewportCameras::UseStageCamera(const UsdStageRefPtr &stage, const SdfPath 
     _currentConfig->_renderCameraType = StageCamera;
     _currentConfig->_stageCameraPath = cameraPath;
     _renderCamera = &_stageCamera;
+}
+
+void ViewportCameras::SwitchFromStageCameraToPerspective(const UsdStageRefPtr &stage) {
+    if (!IsUsingStageCamera()) return;
+    _ownedCameras->_cameras[ViewportPerspective] = _stageCamera;
+    UseInternalCamera(stage, ViewportPerspective);
 }
 
 void ViewportCameras::UseInternalCamera(const UsdStageRefPtr &stage, CameraType cameraType) {

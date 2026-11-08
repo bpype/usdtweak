@@ -9,6 +9,7 @@
 #include "Grid.h"
 #include "SceneObjectDrawer.h"
 #include "Manipulator.h"
+#include "ManipulatorEditability.h"
 #include "MouseHoverManipulator.h"
 #include "OrbitCameraManipulator.h"
 #include "PositionManipulator.h"
@@ -71,7 +72,11 @@ class Viewport final {
     /// Returns the path of the selected stage camera or SdfPath() if the camera is internal
     inline const SdfPath &GetSelectedStageCameraPath() { return _cameras.GetStageCameraPath(); }
 
-    inline bool IsEditingStageCamera() const { return _cameras.IsUsingStageCamera(); }
+    /// True when navigation may write to the current stage camera
+    bool IsStageCameraEditable() const;
+
+    /// Call before navigation moves the camera. False when locked; may switch to Persp.
+    bool PrepareCameraMove();
     inline bool IsEditingInternalOrthoCamera() const { return _cameras.IsUsingInternalOrthoCamera(); }
 
     /// True when the camera framing overlay (mask/outline) should be drawn: a USD stage camera
@@ -93,6 +98,8 @@ class Viewport final {
     /// GetManipulator is the function that will return the official manipulator based on its type ManipulatorT
     template <typename ManipulatorT> inline Manipulator *GetManipulator();
     Manipulator &GetActiveManipulator() { return *_activeManipulator; }
+    /// True when the mouse is over the viewport and nothing is dragged: no gizmo, camera orbit or fly
+    bool IsInMouseHoverState() const { return _currentEditingState == &_mouseHover; }
 
     // The chosen manipulator is the one selected in the toolbar, Translate/Rotate/Scale/Select ...
     // Manipulator *_chosenManipulator;
@@ -101,14 +108,14 @@ class Viewport final {
         return _activeManipulator == GetManipulator<ManipulatorT>();
     };
 
-    /// Draw manipulator toolbox, to select translate, rotate, scale
-    void DrawManipulatorToolbox(const ImVec2 widgetPosition);
-
     /// Draw toolbar: camera selection, renderer options, viewport options ...
     void DrawToolBar(const ImVec2 widgetPosition);
 
     /// Draw a button to enable/disable Hydra rendering
     void DrawHydraEnableButton(bool enabled);
+
+    /// Shared by the Cameras menu and the toolbar popup
+    void DrawCamerasMenuContent();
 
     /// Draw a menu bar on top of the viewport
     void DrawMenuBar();
@@ -169,6 +176,10 @@ class Viewport final {
 
     // Cameras
     ViewportCameras _cameras;
+
+    // Why the stage camera refused the last move, shown for a moment after it
+    ManipulatorEditability _cameraBlockedHud;
+    double _cameraBlockedHudTime = -1.0;
 
     // Manipulators
     // ManipulatorStateHandler _manipulators; // TODO one per stage or pass the stage

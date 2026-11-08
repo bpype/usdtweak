@@ -24,6 +24,11 @@ void ViewportSettings::ParseLine(const char *line) {
     if (sscanf(line, "RenderWithStageCamera=%i", &value) == 1) {
         _renderWithStageCamera = value != 0;
     }
+    if (sscanf(line, "StageCameraNavigation=%i", &value) == 1) {
+        value = std::clamp(value, static_cast<int>(StageCameraNavigation::Locked),
+                           static_cast<int>(StageCameraNavigation::Editable));
+        _stageCameraNavigation = static_cast<StageCameraNavigation>(value);
+    }
     if (sscanf(line, "ShowCameraMask=%i", &value) == 1) {
         _showCameraMask = value != 0;
     }
@@ -47,6 +52,7 @@ void ViewportSettings::Dump(ImGuiTextBuffer *buf) {
     buf->appendf("CamFlySpeed=%lf\n", _camFlySpeed);
     buf->appendf("SnapPlaybackToFrame=%d\n", _snapPlaybackToFrame);
     buf->appendf("RenderWithStageCamera=%d\n", _renderWithStageCamera);
+    buf->appendf("StageCameraNavigation=%d\n", static_cast<int>(_stageCameraNavigation));
     buf->appendf("ShowCameraMask=%d\n", _showCameraMask);
     buf->appendf("ShowCameraFrameOutline=%d\n", _showCameraFrameOutline);
     buf->appendf("CameraMaskColor=%f %f %f %f\n", _cameraMaskColor[0], _cameraMaskColor[1], _cameraMaskColor[2],

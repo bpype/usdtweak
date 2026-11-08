@@ -99,8 +99,7 @@ void Viewport::DrawMenuBar() {
         }
         if (ImGui::BeginMenu("Cameras")) {
             if (_renderer) {
-                _cameras.DrawCameraList(GetCurrentStage());
-                _cameras.DrawCameraEditor(GetCurrentStage(), GetCurrentTimeCode());
+                DrawCamerasMenuContent();
             }
             ImGui::EndMenu();
         }
@@ -110,7 +109,7 @@ void Viewport::DrawMenuBar() {
 
 Viewport::Viewport(UsdStageRefPtr stage, Selection &selection)
     : _stage(stage), _orbitCameraManipulator({InitialWindowWidth, InitialWindowHeight}),
-      _flyCameraManipulator({InitialWindowWidth, InitialWindowHeight}), _currentEditingState(new MouseHoverManipulator()),
+      _flyCameraManipulator({InitialWindowWidth, InitialWindowHeight}), _currentEditingState(&_mouseHover),
       _activeManipulator(&_positionManipulator),
       _selection(selection), _textureSize(1, 1), _viewportName("Viewport 1") {
 
@@ -280,18 +279,26 @@ void Viewport::DrawToolBar(const ImVec2 widgetPosition) {
     }
     ImGui::PopStyleColor();
     ImGui::SameLine();
-    std::string cameraName(ICON_FA_CAMERA);
+    const bool stageCameraLocked =
+        _cameras.IsUsingStageCamera() &&
+        ResourcesLoader::GetViewportSettings()._stageCameraNavigation == StageCameraNavigation::Locked;
+    std::string cameraName(stageCameraLocked ? ICON_FA_LOCK : ICON_FA_CAMERA);
     cameraName += "  " + _cameras.GetCurrentCameraName();
     ImGui::Button(cameraName.c_str());
     if (_renderer &&
         ImGui::BeginPopupContextItem(_viewportName.c_str(), flags)) { // should be name with the viewport name instead
-        _cameras.DrawCameraList(GetCurrentStage());
-        _cameras.DrawCameraEditor(GetCurrentStage(), GetCurrentTimeCode());
+        DrawCamerasMenuContent();
         ImGui::EndPopup();
     }
     if (ImGui::IsItemHovered() && GImGui->HoveredIdTimer > 1) {
-        ImGui::SetTooltip("Cameras");
+        ImGui::SetTooltip(stageCameraLocked ? "Cameras (locked)"
+                                            : "Cameras");
     }
+}
+
+void Viewport::DrawCamerasMenuContent() {
+    _cameras.DrawCameraList(GetCurrentStage());
+    _cameras.DrawCameraEditor(GetCurrentStage(), GetCurrentTimeCode());
 }
 
 void Viewport::DrawHydraEnableButton(bool enabled) {
@@ -303,47 +310,6 @@ void Viewport::DrawHydraEnableButton(bool enabled) {
     }
 }
 
-// Poor man manipulator toolbox
-void Viewport::DrawManipulatorToolbox(const ImVec2 widgetPosition) {
-    const ImVec2 buttonSize(25, 25); // Button size
-    const ImVec4 defaultColor(0.1, 0.1, 0.1, 0.9);
-    const ImVec4 selectedColor(ColorButtonHighlight);
-    ImGui::SetCursorPos(widgetPosition);
-    ImGui::SetNextItemWidth(80);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, defaultColor);
-    DrawPickMode(_selectionManipulator);
-    ImGui::PopStyleColor();
-
-    ImGui::PushStyleColor(ImGuiCol_Button, IsChosenManipulator<MouseHoverManipulator>() ? selectedColor : defaultColor);
-    ImGui::SetCursorPosX(widgetPosition.x);
-
-    if (ImGui::Button(ICON_FA_MOUSE_POINTER, buttonSize)) {
-        ExecuteAfterDraw<ViewportsSelectMouseHoverManipulator>();
-    }
-    ImGui::PopStyleColor();
-
-    ImGui::PushStyleColor(ImGuiCol_Button, IsChosenManipulator<PositionManipulator>() ? selectedColor : defaultColor);
-    ImGui::SetCursorPosX(widgetPosition.x);
-    if (ImGui::Button(ICON_FA_ARROWS_ALT, buttonSize)) {
-        ExecuteAfterDraw<ViewportsSelectPositionManipulator>();
-    }
-    ImGui::PopStyleColor();
-
-    ImGui::PushStyleColor(ImGuiCol_Button, IsChosenManipulator<RotationManipulator>() ? selectedColor : defaultColor);
-    ImGui::SetCursorPosX(widgetPosition.x);
-    if (ImGui::Button(ICON_FA_SYNC_ALT, buttonSize)) {
-        ExecuteAfterDraw<ViewportsSelectRotationManipulator>();
-    }
-    ImGui::PopStyleColor();
-
-    ImGui::PushStyleColor(ImGuiCol_Button, IsChosenManipulator<ScaleManipulator>() ? selectedColor : defaultColor);
-    ImGui::SetCursorPosX(widgetPosition.x);
-    if (ImGui::Button(ICON_FA_EXPAND_ARROWS_ALT, buttonSize)) {
-        ExecuteAfterDraw<ViewportsSelectScaleManipulator>();
-    }
-    ImGui::PopStyleColor();
-}
-
 void Viewport::FrameCameraManipulatorsOnBBox(GfCamera &cam, const GfBBox3d &bbox) {
     for (CameraRig *c : _cameraManipulators) {
         c->FrameBoundingBox(cam, bbox);
@@ -352,7 +318,7 @@ void Viewport::FrameCameraManipulatorsOnBBox(GfCamera &cam, const GfBBox3d &bbox
 
 /// Frame the viewport using the bounding box of the selection
 void Viewport::FrameCameraOnSelection(const Selection &selection) { // Camera manipulator ???
-    if (GetCurrentStage() && !selection.IsSelectionEmpty(GetCurrentStage())) {
+    if (GetCurrentStage() && !selection.IsSelectionEmpty(GetCurrentStage()) && PrepareCameraMove()) {
         UsdGeomBBoxCache bboxcache(_imagingSettings.frame, UsdGeomImageable::GetOrderedPurposeTokens());
         GfBBox3d bbox;
         for (const auto &primPath : selection.GetSelectedPaths(GetCurrentStage())) {
@@ -364,7 +330,7 @@ void Viewport::FrameCameraOnSelection(const Selection &selection) { // Camera ma
 
 /// Frame the viewport using the bounding box of the root prim
 void Viewport::FrameCameraOnRootPrim() {
-    if (GetCurrentStage()) {
+    if (GetCurrentStage() && PrepareCameraMove()) {
         FrameCameraManipulatorsOnBBox(GetEditableCamera(), ComputeFramingWorldBound());
     }
 }
@@ -543,6 +509,33 @@ void Viewport::HandleManipulationEvents() {
 GfVec2i Viewport::GetViewportSize() const { return _drawTarget->GetSize(); }
 
 GfCamera &Viewport::GetEditableCamera() { return _cameras.GetEditableCamera(); }
+
+bool Viewport::IsStageCameraEditable() const {
+    return _cameras.IsUsingStageCamera() &&
+           ResourcesLoader::GetViewportSettings()._stageCameraNavigation == StageCameraNavigation::Editable;
+}
+
+bool Viewport::PrepareCameraMove() {
+    if (!_cameras.IsUsingStageCamera()) return true;
+    switch (ResourcesLoader::GetViewportSettings()._stageCameraNavigation) {
+    case StageCameraNavigation::Locked:
+        return false;
+    case StageCameraNavigation::FallbackToPersp:
+        _cameras.SwitchFromStageCameraToPerspective(GetCurrentStage());
+        return true;
+    case StageCameraNavigation::Editable: {
+        const UsdPrim camera = GetCurrentStage()->GetPrimAtPath(_cameras.GetStageCameraPath());
+        ManipulatorEditability editability = ComputeStageCameraEditability(camera, GetCurrentTimeCode());
+        if (editability.state == ManipulatorEditability::Blocked) {
+            _cameraBlockedHud = std::move(editability);
+            _cameraBlockedHudTime = ImGui::GetTime();
+            return false;
+        }
+        return true;
+    }
+    }
+    return true;
+}
 const GfCamera &Viewport::GetCurrentCamera() const { return _cameras.GetCurrentCamera(); }
 
 // TODO: keep the viewport camera in a variable and avoid recomputing it when not necessary
@@ -689,7 +682,8 @@ void Viewport::Render() {
 
     // Draw active manipulator, camera frame overlay and HUD
     const bool showCameraFrame = IsCameraFrameVisible();
-    const bool showHydraUI = _imagingSettings.showGizmos || showCameraFrame;
+    const bool showCameraBlockedHud = _cameraBlockedHudTime >= 0.0 && ImGui::GetTime() - _cameraBlockedHudTime < 2.0;
+    const bool showHydraUI = _imagingSettings.showGizmos || showCameraFrame || showCameraBlockedHud;
     if (showHydraUI) {
         BeginHydraUI(width, height);
         // Mask first so the manipulator gizmos draw on top of it.
@@ -700,6 +694,9 @@ void Viewport::Render() {
             GetActiveManipulator().OnDrawFrame(*this);
             if (_currentEditingState && _currentEditingState != _activeManipulator)
                 _currentEditingState->OnDrawFrame(*this);
+        }
+        if (showCameraBlockedHud) {
+            DrawManipulatorEditabilityHud(_cameraBlockedHud);
         }
         // DrawHUD(this);
         EndHydraUI();

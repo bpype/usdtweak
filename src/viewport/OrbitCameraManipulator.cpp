@@ -8,15 +8,17 @@
 OrbitCameraManipulator::OrbitCameraManipulator(const GfVec2i &viewportSize, bool isZUp) : CameraRig(viewportSize, isZUp) {}
 
 void OrbitCameraManipulator::OnBeginEdition(Viewport &viewport) {
-    if (viewport.IsEditingStageCamera()) {
+    _stageCamera = UsdGeomCamera();
+    if (viewport.IsStageCameraEditable()) {
         _stageCamera = UsdGeomCamera::Get(viewport.GetCurrentStage(), viewport.GetSelectedStageCameraPath());
         BeginEdition(viewport.GetCurrentStage());
     }
 }
 
 void OrbitCameraManipulator::OnEndEdition(Viewport &viewport) {
-    if (viewport.IsEditingStageCamera() && _stageCamera) {
+    if (_stageCamera) {
         EndEdition();
+        _stageCamera = UsdGeomCamera();
     }
     SetMovementType(MovementType::None);
 }
@@ -41,10 +43,14 @@ Manipulator *OrbitCameraManipulator::OnUpdate(Viewport &viewport) {
         Editor::SetMouseCaptured(true);
         SetMovementType(MovementType::Dolly);
     }
+    const GfVec2d mouseDelta(io.MouseDelta.x, io.MouseDelta.y);
+    // No switch to Persp without an actual move
+    if (_movementType == MovementType::None || mouseDelta == GfVec2d(0.0) || !viewport.PrepareCameraMove()) {
+        return this;
+    }
     GfCamera &currentCamera = viewport.GetEditableCamera();
-    GfVec2d mouseDelta(io.MouseDelta.x, io.MouseDelta.y);
     if (Move(currentCamera, mouseDelta)) {
-        if (viewport.IsEditingStageCamera() && _stageCamera) {
+        if (_stageCamera && viewport.IsStageCameraEditable()) {
             // This is going to fill the undo/redo buffer :S
             _stageCamera.SetFromCamera(currentCamera, viewport.GetCurrentTimeCode());
         }
@@ -53,6 +59,7 @@ Manipulator *OrbitCameraManipulator::OnUpdate(Viewport &viewport) {
 }
 
 void OrbitCameraManipulator::Zoom(Viewport &viewport, double wheelTicks) {
+    if (!viewport.PrepareCameraMove()) return;
     SetViewportSize(viewport.GetViewportSize());
 
     // Move() converts a mouse pixel delta into a dolly scale factor, so express one wheel tick as
@@ -68,7 +75,7 @@ void OrbitCameraManipulator::Zoom(Viewport &viewport, double wheelTicks) {
 
     // The wheel is not a drag, so there is no OnBeginEdition/OnEndEdition span around it: when a
     // stage camera is being edited, each wheel tick records its own edition.
-    if (moved && viewport.IsEditingStageCamera()) {
+    if (moved && viewport.IsStageCameraEditable()) {
         UsdGeomCamera stageCamera = UsdGeomCamera::Get(viewport.GetCurrentStage(), viewport.GetSelectedStageCameraPath());
         if (stageCamera) {
             BeginEdition(viewport.GetCurrentStage());

@@ -10,15 +10,17 @@
 FlyCameraManipulator::FlyCameraManipulator(const GfVec2i &viewportSize, bool isZUp) : CameraRig(viewportSize, isZUp) {}
 
 void FlyCameraManipulator::OnBeginEdition(Viewport &viewport) {
-    if (viewport.IsEditingStageCamera()) {
+    _stageCamera = UsdGeomCamera();
+    if (viewport.IsStageCameraEditable()) {
         _stageCamera = UsdGeomCamera::Get(viewport.GetCurrentStage(), viewport.GetSelectedStageCameraPath());
         BeginEdition(viewport.GetCurrentStage());
     }
 }
 
 void FlyCameraManipulator::OnEndEdition(Viewport &viewport) {
-    if (viewport.IsEditingStageCamera() && _stageCamera) {
+    if (_stageCamera) {
         EndEdition();
+        _stageCamera = UsdGeomCamera();
     }
 }
 
@@ -79,9 +81,13 @@ Manipulator *FlyCameraManipulator::OnUpdate(Viewport &viewport) {
     GfVec3d moveVec(InputRight(), InputUp(), InputForward());
     moveVec *= _camFlySpeed * InputSpeedBoost();
 
+    // No switch to Persp without an actual move
+    if ((rotVec == GfVec2d(0.0) && moveVec == GfVec3d(0.0)) || !viewport.PrepareCameraMove()) {
+        return this;
+    }
     GfCamera &currentCamera = viewport.GetEditableCamera();
     if (Move(currentCamera, rotVec, moveVec)) {
-        if (viewport.IsEditingStageCamera() && _stageCamera) {
+        if (_stageCamera && viewport.IsStageCameraEditable()) {
             // This is going to fill the undo/redo buffer :S
             _stageCamera.SetFromCamera(currentCamera, viewport.GetCurrentTimeCode());
         }

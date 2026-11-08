@@ -4,6 +4,7 @@
 #include "Gui.h"
 #include "ImGuiHelpers.h"
 #include "ResourcesLoader.h"
+#include "ViewportCameras.h"
 #include <Style.h>
 #include <iostream>
 
@@ -38,6 +39,12 @@ void PreferencesModalDialog::Draw() {
             }
             ImGui::Separator();
             ImGui::Checkbox("Show splash screen at startup", &editor.GetShowSplashScreen());
+            ImGui::Checkbox("Dropped files open as stages", &editor.GetDropOpensStage());
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("On (default): a file dragged from the desktop or file manager opens as a stage,\n"
+                                  "shown in the viewport and stage outliner. Off: it opens as a layer, shown in the\n"
+                                  "layer editors. Dropping an empty file always creates a new stage.");
+            }
             EditorSettings &editorSettings = ResourcesLoader::GetEditorSettings();
             ImGui::Checkbox("Hide cursor when navigating", &editorSettings._hideCursorWhenNavigating);
             if (ImGui::IsItemHovered()) {
@@ -63,6 +70,7 @@ void PreferencesModalDialog::Draw() {
                                   "itself, so motion blur and the other camera parameters are honoured.\n"
                                   "Off (default): the renderer only receives the view and projection matrices.");
             }
+            DrawStageCameraNavigationCombo(viewportSettings._stageCameraNavigation);
             ImGui::EndChild();
         }
 

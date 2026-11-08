@@ -14,6 +14,9 @@ struct GLFWwindow;
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
+/// Windows an action can reveal to show its result, see Editor::RevealWindow
+enum class EditorWindow { StageOutliner, StagePropertyEditor, LayerHierarchy, LayerPropertyEditor, AttributeEditor };
+
 /// Editor contains the data shared between widgets, like selections, stages, etc etc
 class Editor {
 
@@ -73,6 +76,16 @@ class Editor {
     void SetStagePathSelection(const SdfPath &primPath);
     void AddStagePathSelection(const SdfPath &primPath);
 
+    /// Makes the window showing the result of an action visible: selects its dock tab, raises it when floating, and
+    /// opens it when closed if openIfClosed (explicit navigations only, a selection change must not reopen a window the
+    /// user closed). It is left alone when the user works in it or in a window sharing its dock tab bar, switching the
+    /// tab would hide what they are interacting with.
+    void RevealWindow(EditorWindow window, bool openIfClosed = false);
+
+    /// Explicit navigation to a layer prim or property (links, search results, ...): selects it and shows it,
+    /// opening the layer windows if they are closed
+    void NavigateToLayerPath(const SdfLayerRefPtr &layer, const SdfPath &path);
+
     /// Create a new layer in file path
     void CreateNewLayer(const std::string &path);
     void FindOrOpenLayer(const std::string &path);
@@ -89,6 +102,9 @@ class Editor {
 
     /// Draw the menu bar
     void DrawMainMenuBar();
+
+    /// Windows menu content, grouped in stage/layer/viewport/debug submenus
+    void DrawWindowsMenuItems();
 
     /// Draw the UI
     void Draw();
@@ -125,11 +141,14 @@ class Editor {
     void SetUIScale(float scaleValue);
     float GetUIScale() const;
     bool &GetShowSplashScreen() { return _settings._showSplashScreen; }
+    bool &GetDropOpensStage() { return _settings._dropOpensStage; }
 
     static void SetMouseCaptured(bool captured);
     static bool GetMouseCaptured();
 
   private:
+    void RevealLayerSelection(const SdfPath &path, bool openIfClosed);
+
     /// Interface with the settings
     void LoadSettings();
     void SaveSettings() const;

@@ -616,7 +616,9 @@ void DrawLayerPrimHierarchy(SdfLayerRefPtr layer, Selection &selection) {
             FocusedOnFirstSelectedPath(selection.GetAnchorPrimPath(layer), paths, clipper);
         }
         msIO = ImGui::EndMultiSelect();
-        ApplyMultiSelectRequests(msIO, selection, layer, primCount, [&](int i) { return paths[i]; });
+        if (ApplyMultiSelectRequests(msIO, selection, layer, primCount, [&](int i) { return paths[i]; })) {
+            ExecuteAfterDraw<EditorRevealWindow>(EditorWindow::LayerPropertyEditor);
+        }
 
         ImGui::EndTable();
     }

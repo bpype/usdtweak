@@ -51,6 +51,8 @@ struct EditorSetPreviousPrim;
 struct EditorSetNextPrim;
 struct EditorSetSelection;
 struct EditorSelectAttributePath;
+struct EditorOpenAttributeEditor;
+struct EditorRevealWindow;
 struct EditorShutdown;
 struct EditorStartPlayback;
 struct EditorStopPlayback;

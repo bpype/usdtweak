@@ -1,6 +1,13 @@
 #pragma once
 struct ImGuiTextBuffer;
 
+/// Viewport navigation behaviour with a stage camera. Serialized: keep the values stable.
+enum class StageCameraNavigation : int {
+    Locked = 0,
+    FallbackToPersp = 1, // moves a copy in Persp
+    Editable = 2,
+};
+
 struct ViewportSettings {
 
     // Default value of the viewport use materials
@@ -15,6 +22,9 @@ struct ViewportSettings {
     // When true, a stage camera is handed to Hydra by path instead of as view and projection matrices,
     // so the renderer gets the whole camera: shutter for motion blur, depth of field, etc.
     bool _renderWithStageCamera = false;
+
+    // Protects stage cameras from accidental navigation edits
+    StageCameraNavigation _stageCameraNavigation = StageCameraNavigation::FallbackToPersp;
 
     // Camera framing overlay, drawn when a USD stage camera is the active viewport camera
     bool _showCameraMask = false;
